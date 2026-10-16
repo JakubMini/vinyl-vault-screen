@@ -1,0 +1,18 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Public on purpose: Access must not protect this Worker, or the screen can't log in.
+  // Deploy it only to the personal Cloudflare account (see CLAUDE.md).
+  "name": "vinyl-vault-screen",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+
+  // The vault, reached Worker to Worker inside Cloudflare rather than over its public URL.
+  // Both Workers must be on the same account. Locally, `wrangler dev` finds the vault if it
+  // is running in another terminal.
+  "services": [{ "binding": "VAULT", "service": "vinyl-value-vault" }]
+}

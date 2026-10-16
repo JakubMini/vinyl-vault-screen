@@ -66,9 +66,10 @@ void board_begin() {
   lv_init();
   lv_tick_set_cb([]() -> uint32_t { return millis(); });
   lv_display_t *display = lv_display_create(BOARD_W, BOARD_H);
-  // Two partial buffers in internal RAM: LVGL draws one while the other is copied out. Kept
-  // small, because each TLS connection needs about 40 KB of internal RAM too.
-  const size_t bytes = BOARD_W * 40 * sizeof(uint16_t);
+  // Two partial buffers in internal RAM: LVGL draws one while the other is copied out. Small:
+  // LVGL only draws text and controls (the wheel draws itself), and each TLS connection needs a
+  // block of about 17 KB of internal RAM in one piece.
+  const size_t bytes = BOARD_W * 20 * sizeof(uint16_t);
   void *a = heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   void *b = heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   lv_display_set_buffers(display, a, b, bytes, LV_DISPLAY_RENDER_MODE_PARTIAL);

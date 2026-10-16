@@ -113,8 +113,8 @@ static int call(const char *method, const String &path, const String &body, Json
     if (err && status < 300) status = -2;
   }
   http.end();
-  Serial.printf("{\"event\":\"http\",\"method\":\"%s\",\"path\":\"%s\",\"status\":%d,\"ms\":%lu}\n", method,
-                path.c_str(), status, millis() - start);
+  Serial.printf("{\"event\":\"http\",\"method\":\"%s\",\"path\":\"%s\",\"status\":%d,\"ms\":%lu,\"internal_largest\":%u}\n",
+                method, path.c_str(), status, millis() - start, heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   return status;
 }
 

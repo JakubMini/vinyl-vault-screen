@@ -321,7 +321,7 @@ extern uint32_t profile_loop_us, profile_touch_us;  // main.cpp, board.cpp
 
 constexpr int POOL = 7;                       // covers drawn: the front, three before and three after
 constexpr int BAND_TOP = 56, BAND_BOTTOM = 290;  // the rows the wheel owns
-constexpr int STRIP = 30;                     // rows built at a time
+constexpr int STRIP = 16;                     // rows built at a time (internal RAM, 15 KB)
 static const uint16_t BG565 = 0x1082;         // BG as RGB565
 
 static struct {

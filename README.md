@@ -119,7 +119,7 @@ The pins and panel set-up are in [`firmware/src/board.cpp`](firmware/src/board.c
 | Display | [Arduino_GFX](https://github.com/moononournation/Arduino_GFX) | Ships this board's panel init sequence. |
 | Images | stb_image once, then [JPEGDEC](https://github.com/bitbank2/JPEGDEC) | Progressive originals once; fast baseline copies every time after. |
 | Storage | LittleFS (10 MB) + NVS | The collection and covers; Wi-Fi and the token. |
-| Fonts | [Funnel Sans and Display](https://fonts.google.com/specimen/Funnel+Sans), [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) (SIL OFL), via `lv_font_conv` | The type of [jakubszypicyn.com](https://jakubszypicyn.com/vinyls); LVGL's built-in fonts have no £ and no accented letters. |
+| Fonts | [Funnel Sans and Display](https://fonts.google.com/specimen/Funnel+Sans), [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono), [Noto Sans Devanagari](https://fonts.google.com/noto/specimen/Noto+Sans+Devanagari) (SIL OFL), via `firmware/tools/fonts.sh` | The type of [jakubszypicyn.com](https://jakubszypicyn.com/vinyls). Latin with Polish and the rest of Extended-A, and Devanagari for titles, drawn letter by letter: LVGL doesn't join conjuncts. |
 | Gateway | Cloudflare Worker, TypeScript, no framework | 30 lines. Free. Same account as the vault. |
 
 ## Run it

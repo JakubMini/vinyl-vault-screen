@@ -31,12 +31,29 @@ static const lv_color_t BG = lv_color_hex(0x0B0F0C), CHIP = lv_color_hex(0x181E1
 static std::vector<Record> records;
 static std::map<int, Detail> details;  // each record's history and prices, by id
 
-// The board's copy of the collection, into RAM.
-static bool load_collection() { return store_load_records(records) && (store_load_details(details), true); }
+// The board's copy of the collection, into RAM, and the sync generation it came from.
+static uint32_t loaded_gen;
+static bool load_collection() {
+  loaded_gen = sync_status().records_gen;
+  return store_load_records(records) && (store_load_details(details), true);
+}
 static void start();
 static void open_wifi();
 static void open_link();
 static void open_wheel();
+static void open_clock();
+
+// The crate and a record's page give way to the clock when left alone; a tap on it calls `back`.
+// Cleared when that screen goes, so a new screen at the same address is never mistaken for it.
+static lv_obj_t *idle_screen;
+static void (*resume)();
+static void idle_here(lv_obj_t *s, void (*back)()) {
+  idle_screen = s;
+  resume = back;
+  lv_obj_add_event_cb(s, [](lv_event_t *e) {
+    if (lv_event_get_target_obj(e) == idle_screen) idle_screen = nullptr;
+  }, LV_EVENT_DELETE, nullptr);
+}
 
 // ---- shared bits ---------------------------------------------------------------------------
 
@@ -341,6 +358,7 @@ static void open_record(int index) {
   }
 
   lv_obj_t *s = screen();
+  idle_here(s, [] { open_record(view.index); });
   auto back = [](lv_event_t *) { open_wheel(); };
   lv_obj_add_event_cb(s, [](lv_event_t *) {
     const lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
@@ -432,7 +450,7 @@ static struct {
   float speed = 0;        // records per second, smoothed, whoever is turning the wheel
   int repaint = 0;        // frames to draw regardless, e.g. after LVGL painted the whole screen
   int front = -1;
-  uint32_t last_ms = 0, records_gen = 0, status_ms = 0, fps_ms = 0;
+  uint32_t last_ms = 0, status_ms = 0, fps_ms = 0;
   int frames = 0, frame_us = 0, copy_us = 0;
   const lv_image_dsc_t *shown[POOL];
   uint16_t *strip;
@@ -609,7 +627,7 @@ static bool covers_arrived() {
 
 // The sync task replaced the list: reload it, keeping the same record at the front.
 static void reload_records() {
-  const int id = records.empty() ? -1 : records[wheel.front].id;
+  const int id = records.empty() ? -1 : records[wheel_index((int)roundf(wheel.pos), records.size())].id;
   if (!load_collection()) return;
   int at = 0;
   for (size_t i = 0; i < records.size(); i++) if (records[i].id == id) at = i;
@@ -642,10 +660,7 @@ static void tick(lv_timer_t *) {
     lv_timer_pause(wheel.timer);  // the screen and its timer go once the link screen is up
     return (void)unlinked(401);
   }
-  if (s.records_gen != wheel.records_gen) {
-    wheel.records_gen = s.records_gen;
-    reload_records();
-  }
+  if (s.records_gen != loaded_gen) reload_records();
   update_front();
   if (wheel.repaint > 0 || wheel.pos != wheel.drawn_pos || covers_arrived()) {
     if (wheel.repaint > 0) wheel.repaint--;
@@ -714,9 +729,9 @@ static void touched(lv_event_t *e) {
 
 static void open_wheel() {
   lv_obj_t *s = screen();
+  idle_here(s, open_wheel);
   wheel.front = -1;
   wheel.sync_text = "";
-  wheel.records_gen = sync_status().records_gen;
   // LVGL paints the whole new screen, band included, on its next refresh: draw over it after.
   wheel.repaint = 3;
   if (!wheel.strip) wheel.strip = (uint16_t *)heap_caps_malloc(BOARD_W * STRIP * 2, MALLOC_CAP_INTERNAL);
@@ -775,6 +790,90 @@ static void open_wheel() {
   wheel.timer = lv_timer_create(tick, 16, nullptr);
   lv_obj_add_event_cb(s, [](lv_event_t *) { lv_timer_delete(wheel.timer); }, LV_EVENT_DELETE, nullptr);
   update_front();
+  show(s);
+}
+
+// ---- clock -------------------------------------------------------------------------------------
+//
+// Left alone for two minutes, the crate or a record's page becomes a clock drawn on the record:
+// two hands, the stylus going round the groove for the seconds, and the date. A tap goes back.
+
+constexpr int DIAL_CX = 240, DIAL_CY = 210, DIAL_R = 200;
+constexpr uint32_t IDLE_MS = 2 * 60 * 1000;
+static lv_image_dsc_t face;  // drawn the first time the clock opens, not at boot
+
+static struct {
+  lv_obj_t *hour, *minute, *second, *date, *year;
+  lv_point_precise_t hour_at[2], minute_at[2];
+  int minute_shown;
+} dial;
+
+// The point `turns` of the way round from 12 o'clock, r from the centre.
+static lv_point_precise_t on_dial(float turns, float r) {
+  const float a = turns * 2 * PI;
+  return {(lv_value_precise_t)lroundf(DIAL_CX + r * sinf(a)), (lv_value_precise_t)lroundf(DIAL_CY - r * cosf(a))};
+}
+
+// Every second the stylus moves on; the hands and the date only when the minute changes.
+static void dial_tick(lv_timer_t *) {
+  const time_t now = time(nullptr);
+  tm t;
+  localtime_r(&now, &t);
+  const lv_point_precise_t s = on_dial(t.tm_sec / 60.0f, DIAL_R * 0.9f);
+  lv_obj_set_pos(dial.second, s.x - 6, s.y - 6);
+  if (t.tm_min == dial.minute_shown) return;
+  dial.minute_shown = t.tm_min;
+  dial.hour_at[1] = on_dial((t.tm_hour % 12 + t.tm_min / 60.0f) / 12, DIAL_R * 0.5f);
+  dial.minute_at[1] = on_dial(t.tm_min / 60.0f, DIAL_R * 0.8f);
+  lv_line_set_points(dial.hour, dial.hour_at, 2);
+  lv_line_set_points(dial.minute, dial.minute_at, 2);
+  char day[12], month[12];
+  strftime(day, sizeof day, "%A", &t);
+  strftime(month, sizeof month, "%B", &t);
+  lv_label_set_text_fmt(dial.date, "%s %d %s", day, t.tm_mday, month);
+  lv_label_set_text_fmt(dial.year, "%d · tap for the crate", t.tm_year + 1900);
+}
+
+static void open_clock() {
+  if (!face.data) draw_record(face, 2 * DIAL_R, 0, ART_BG);
+  lv_obj_t *s = screen();
+  lv_obj_t *rec = lv_image_create(s);
+  lv_image_set_src(rec, &face);
+  lv_obj_set_pos(rec, DIAL_CX - DIAL_R, DIAL_CY - DIAL_R);
+  for (int h = 0; h < 12; h++) {
+    const lv_point_precise_t p = on_dial(h / 12.0f, DIAL_R * 0.9f);
+    dot(s, p.x, p.y, h % 3 ? 5 : 9, h % 3 ? DIM : TEXT);
+  }
+  auto hand = [s](lv_point_precise_t *at, int width, lv_color_t color) {
+    at[0] = at[1] = {DIAL_CX, DIAL_CY};
+    lv_obj_t *l = lv_line_create(s);
+    lv_line_set_points(l, at, 2);
+    lv_obj_set_style_line_width(l, width, 0);
+    lv_obj_set_style_line_color(l, color, 0);
+    lv_obj_set_style_line_rounded(l, true, 0);
+    return l;
+  };
+  dial.hour = hand(dial.hour_at, 9, METAL);
+  dial.minute = hand(dial.minute_at, 5, TEXT);
+  dial.second = dot(s, DIAL_CX, DIAL_CY, 12, ACCENT);  // the stylus, in the groove
+  lv_obj_t *spindle = dot(s, DIAL_CX, DIAL_CY, 22, PART);
+  lv_obj_set_style_border_color(spindle, METAL, 0);
+  lv_obj_set_style_border_width(spindle, 2, 0);
+
+  dial.date = label(s, &font_30, TEXT, 448);
+  lv_obj_set_pos(dial.date, 16, 414);
+  dial.year = label(s, &font_mono_14, DIM, 448);
+  lv_obj_set_pos(dial.year, 16, 454);
+  for (lv_obj_t *l : {dial.date, dial.year}) lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+  // Nothing on the dial takes the tap from the screen.
+  for (uint32_t i = 0; i < lv_obj_get_child_count(s); i++) lv_obj_set_clickable(lv_obj_get_child(s, i), false);
+  lv_obj_add_event_cb(s, [](lv_event_t *) { resume(); }, LV_EVENT_CLICKED, nullptr);
+
+  dial.minute_shown = -1;
+  dial_tick(nullptr);
+  lv_timer_t *timer = lv_timer_create(dial_tick, 1000, nullptr);
+  lv_obj_add_event_cb(s, [](lv_event_t *e) { lv_timer_delete((lv_timer_t *)lv_event_get_user_data(e)); },
+                      LV_EVENT_DELETE, timer);
   show(s);
 }
 
@@ -958,6 +1057,13 @@ void ui_begin() {
   draw_record(vinyl, WHEEL_FRONT_PX, 6, 0x18E3);  // the placeholder cover: a record on a CHIP sleeve
   draw_record(disc, 144, 0, ART_BG);
   draw_record(platter, 240, 0, ART_BG);
+  // Before the time is known (offline since boot) there is no clock to show.
+  lv_timer_create([](lv_timer_t *) {
+    if (idle_screen && lv_screen_active() == idle_screen && lv_display_get_inactive_time(nullptr) > IDLE_MS &&
+        time(nullptr) > 1700000000) {
+      open_clock();
+    }
+  }, 1000, nullptr);
   String ssid;
   if (!wifi_saved(ssid)) return open_wifi();
   message(("Joining " + ssid + "…").c_str());

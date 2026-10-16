@@ -36,6 +36,9 @@ The price at every grade is right there on the buttons.
   re-priced there at its new grade.
 - **Works offline.** Everything it shows is a copy kept on the board, refreshed once an hour (on
   the hour) or when you tap Refresh. Browsing never waits for the network.
+- **Becomes a clock when left alone.** After two minutes without a touch, the crate or record
+  page turns into an analog clock drawn on the record, with UK time and the date under it. A tap
+  goes back to the same record.
 
 ## How it works
 
@@ -166,6 +169,7 @@ before-and-after profile. The details are in [CLAUDE.md](CLAUDE.md).
 
 - [x] Device login, Wi-Fi from the screen, the wheel, the record page, grading
 - [x] The board's own copy of the collection, refreshed hourly
+- [x] A record clock when idle
 - [ ] Deploy the gateway and merge the vault's device login
 - [ ] NFC: tap a sleeve on the stand to open its record and log a play
 - [ ] A printed stand. The [v3 STLs](https://claude.ai/share/23891de9-6aae-48fc-b43c-f0128d91087c)

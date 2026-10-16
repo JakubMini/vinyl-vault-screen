@@ -62,7 +62,8 @@ bool wifi_connect(const String &ssid, const String &pass) {
   prefs.putString("ssid", ssid);
   prefs.putString("pass", pass);
   // TLS checks certificate dates, so the clock has to be right first.
-  configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
+  // UK time for the idle clock; time() stays UTC, so TLS and sync are unaffected.
+  configTzTime("GMT0BST,M3.5.0/1,M10.5.0", "pool.ntp.org", "time.cloudflare.com");
   for (uint32_t start = millis(); time(nullptr) < 1700000000 && millis() - start < 10000;) delay(100);
   Serial.printf("{\"event\":\"wifi\",\"ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"linked\":%s}\n", ssid.c_str(),
                 WiFi.localIP().toString().c_str(), WiFi.RSSI(), token.isEmpty() ? "false" : "true");

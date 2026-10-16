@@ -29,6 +29,8 @@ static SemaphoreHandle_t lock;
 static SyncStatus status{};
 static volatile bool requested = false;
 static volatile int front_id = -1;
+static volatile bool warm = false;
+static TaskHandle_t sync_task;
 static Preferences prefs;
 
 static void update(void (*fn)(SyncStatus &)) {
@@ -175,6 +177,65 @@ static bool unlinked(int code) {
   return true;
 }
 
+// ---- a new grade, from the screen ------------------------------------------------------------
+
+static struct {
+  bool asked, done;
+  int id, status;
+  const char *field, *grade;
+  Detail detail;
+} grading;
+
+void sync_set_grade(int id, const char *field, const char *grade, const Detail &now) {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  grading.asked = true, grading.done = false;
+  grading.id = id, grading.field = field, grading.grade = grade, grading.detail = now;
+  xSemaphoreGive(lock);
+  xTaskNotifyGive(sync_task);
+}
+
+bool sync_grade_done(int &status, Detail &out) {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  const bool done = grading.done;
+  if (done) status = grading.status, out = std::move(grading.detail), grading.done = false;
+  xSemaphoreGive(lock);
+  return done;
+}
+
+void sync_keep_warm(bool on) { warm = on; }
+
+static bool grade_asked() {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  const bool asked = grading.asked;
+  xSemaphoreGive(lock);
+  return asked;
+}
+
+// While the sync waits, or after its prices: on the gateway connection, warm if the page kept it so.
+// Never mid-prices: with the sync's data in internal RAM, the next price call then loses the connection.
+// Returns the record's id if the vault took the grade, with its detail in `out`; otherwise -1.
+static int serve_grade(Detail &out) {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  const bool asked = grading.asked;
+  grading.asked = false;
+  const int id = grading.id;
+  const char *field = grading.field, *grade = grading.grade;
+  Detail d = std::move(grading.detail);
+  xSemaphoreGive(lock);
+  if (!asked) return -1;
+
+  int code = vault_set_grade(id, field, grade, d);
+  if (code < 0) {  // the gateway may have closed an idle connection; a grade is safe to send twice
+    vault_close();
+    code = vault_set_grade(id, field, grade, d);
+  }
+  out = d;
+  xSemaphoreTake(lock, portMAX_DELAY);
+  grading.done = true, grading.status = code, grading.detail = std::move(d);
+  xSemaphoreGive(lock);
+  return code == 200 ? id : -1;
+}
+
 static void run() {
   const uint32_t start = millis();
   update([](SyncStatus &s) { s.running = true, s.failed = false; });
@@ -198,11 +259,19 @@ static void run() {
     // The last known prices if this fetch fails. Moved, not copied: a copied 15-point history is
     // under 64 bytes, so it would land in internal RAM, 76 bytes a record.
     Detail &d = details[fresh[i].id] = std::move(saved[fresh[i].id]);
+    if (grade_asked()) continue;  // a new grade goes first; the rest keep their last known prices
     code = vault_detail(fresh[i].id, d, true);
     if (unlinked(code)) return vault_close();
     vTaskDelay(1);
   }
-  vault_close();  // its TLS memory is needed for the covers' connection
+  // A grade saved now goes into this sync's copy too, or storing the copy would undo it.
+  Detail graded;
+  const int graded_id = serve_grade(graded);
+  if (graded_id >= 0) {
+    details[graded_id] = graded;
+    for (Record &r : fresh) if (r.id == graded_id) r.value = graded.value, r.media = graded.media, r.sleeve = graded.sleeve;
+    if (store_save_records(fresh)) update([](SyncStatus &s) { s.records_gen++; });
+  }
   if (store_save_details(details)) update([](SyncStatus &s) { s.records_gen++; });
 
   // Covers that are missing or have changed, nearest the front of the wheel first.
@@ -214,8 +283,10 @@ static void run() {
     auto was = std::find_if(old.begin(), old.end(), [&](const Record &o) { return o.id == r.id; });
     if (resized || !have.count(r.id) || was == old.end() || was->cover != r.cover) todo.push_back(&r);
   }
+  // Kept open for the next grade unless covers need its TLS memory.
+  if (!todo.empty()) vault_close();
   int made = 0;
-  while (!todo.empty()) {
+  while (!todo.empty() && !grade_asked()) {  // a new grade goes first; the rest come next sync
     progress("covers", made, made + todo.size());
     const int n = fresh.size();
     int at = 0;
@@ -243,13 +314,25 @@ static void run() {
   Serial.printf("{\"event\":\"synced\",\"records\":%u,\"covers\":%d,\"ms\":%lu}\n", fresh.size(), made, millis() - start);
 }
 
+// Opening costs a TLS handshake, about 2 s; after a failed one, wait before the next.
+static void keep_warm() {
+  static uint32_t tried_at;
+  const bool on = warm && WiFi.isConnected() && vault_linked();
+  if (on && millis() - tried_at < 5000) return;
+  if (on) tried_at = millis();
+  vault_warm(on);
+}
+
 // A sync runs when the clock crosses a full hour, when asked (Refresh, or a board with nothing
 // cached yet), and five minutes after a failed attempt. Never just because the board restarted.
 static void task(void *) {
   long hour_seen = -1;
   time_t retry_at = 0;
   for (;;) {
-    vTaskDelay(pdMS_TO_TICKS(500));
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));  // or sooner, for a grade
+    Detail unused;
+    serve_grade(unused);
+    keep_warm();
     const time_t now = time(nullptr);
     if (now < 1700000000) continue;  // no clock yet
     const long hour = now / 3600;
@@ -267,6 +350,8 @@ void sync_begin() {
   lock = xSemaphoreCreateMutex();
   prefs.begin("sync");
   status.last_ok = prefs.getULong64("last_ok", 0);
-  // Core 0, away from LVGL on core 1: decoding a Discogs cover takes about a second.
-  xTaskCreatePinnedToCore(task, "sync", 20480, nullptr, 1, nullptr, 0);
+  // Core 0, away from LVGL on core 1: decoding a Discogs cover takes about a second. At idle
+  // priority, as a TLS handshake is two seconds of sums: above it, the handshake and the covers'
+  // loader between them can keep core 0's idle task out long enough for the watchdog to reset.
+  xTaskCreatePinnedToCore(task, "sync", 20480, nullptr, tskIDLE_PRIORITY, &sync_task, 0);
 }

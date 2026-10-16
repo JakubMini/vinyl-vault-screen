@@ -4,9 +4,17 @@
 #pragma once
 #include <Arduino.h>
 
+#include "vault.h"
+
 void sync_begin();
 void sync_now();                // a manual refresh
 void sync_hint_front(int id);   // the record at the front, so its cover is fetched first
+
+// A new grade, sent from the sync task so it shares the sync's connection: one at a time. `now` is
+// the record's detail as shown; when done, it comes back as the vault left it (vault_set_grade).
+void sync_set_grade(int id, const char *field, const char *grade, const Detail &now);
+bool sync_grade_done(int &status, Detail &out);  // true once, when the vault has answered
+void sync_keep_warm(bool on);  // while a record's page is up: its grades save on an open connection
 
 struct SyncStatus {
   bool running;

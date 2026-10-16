@@ -61,22 +61,23 @@ static void progress(const char *step, int done, int total) {
 
 // One connection to Discogs' image host, kept open between covers: a TLS handshake costs more
 // than the download itself.
+static NetworkClientSecure cover_tls;
+static HTTPClient cover_http;
+
 static uint8_t *download(const String &url, int &len) {
-  static NetworkClientSecure tls;
-  static HTTPClient http;
   static bool ready = false;
   if (!ready) {
-    tls.useBuiltinCACertBundle();
-    http.setReuse(true);
-    http.setTimeout(15000);
-    http.setUserAgent("VinylVaultScreen/0.1 +https://github.com/JakubMini/vinyl-vault-screen");
+    cover_tls.useBuiltinCACertBundle();
+    cover_http.setReuse(true);
+    cover_http.setTimeout(15000);
+    cover_http.setUserAgent("VinylVaultScreen/0.1 +https://github.com/JakubMini/vinyl-vault-screen");
     ready = true;
   }
   len = 0;
-  if (!http.begin(tls, url)) return nullptr;
+  if (!cover_http.begin(cover_tls, url)) return nullptr;
   uint8_t *buf = nullptr;
-  if (http.GET() == 200 && (len = http.getSize()) > 0 && len <= MAX_BYTES && (buf = (uint8_t *)ps_malloc(len))) {
-    NetworkClient *stream = http.getStreamPtr();
+  if (cover_http.GET() == 200 && (len = cover_http.getSize()) > 0 && len <= MAX_BYTES && (buf = (uint8_t *)ps_malloc(len))) {
+    NetworkClient *stream = cover_http.getStreamPtr();
     int got = 0;
     for (const uint32_t deadline = millis() + 15000; got < len && millis() < deadline;) {
       const int n = stream->read(buf + got, len - got);
@@ -89,7 +90,7 @@ static uint8_t *download(const String &url, int &len) {
       buf = nullptr;
     }
   }
-  http.end();
+  cover_http.end();
   return buf;
 }
 
@@ -152,6 +153,7 @@ static void run() {
   std::vector<Record> fresh, old;
   int code = vault_records(fresh);
   if (unlinked(code) || code != 200) {
+    vault_close();
     update([](SyncStatus &s) { s.running = false, s.failed = true; });
     return;
   }
@@ -163,11 +165,14 @@ static void run() {
   store_load_details(saved);
   for (size_t i = 0; i < fresh.size(); i++) {
     progress("prices", i, fresh.size());
-    Detail &d = details[fresh[i].id] = saved[fresh[i].id];  // the last known prices if this fetch fails
+    // The last known prices if this fetch fails. Moved, not copied: a copied 15-point history is
+    // under 64 bytes, so it would land in internal RAM, 76 bytes a record.
+    Detail &d = details[fresh[i].id] = std::move(saved[fresh[i].id]);
     code = vault_detail(fresh[i].id, d, true);
-    if (unlinked(code)) return;
+    if (unlinked(code)) return vault_close();
     vTaskDelay(1);
   }
+  vault_close();  // its TLS memory is needed for the covers' connection
   if (store_save_details(details)) update([](SyncStatus &s) { s.records_gen++; });
 
   // Covers that are missing or have changed, nearest the front of the wheel first.
@@ -194,11 +199,12 @@ static void run() {
     todo.erase(next);
     const uint32_t t = millis();
     const bool ok = make_cover(*r);
-    Serial.printf("{\"event\":\"cover_cached\",\"id\":%d,\"ok\":%s,\"ms\":%lu}\n", r->id, ok ? "true" : "false",
-                  millis() - t);
+    Serial.printf("{\"event\":\"cover_cached\",\"id\":%d,\"ok\":%s,\"ms\":%lu,\"internal_largest\":%u}\n", r->id,
+                  ok ? "true" : "false", millis() - t, heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     if (ok) update([](SyncStatus &s) { s.covers_gen++; });
     made++;
   }
+  cover_tls.stop();  // so the next sync's gateway connection has the memory
 
   const time_t now = time(nullptr);
   prefs.putULong64("last_ok", now);

@@ -81,13 +81,20 @@ void vault_forget() {
   prefs.remove("token");
 }
 
+static NetworkClientSecure kept_tls;
+static NetworkClient kept_plain;
+static HTTPClient kept_http;
+
+// An idle open connection still holds its TLS buffers, about 33 KB of internal RAM.
+void vault_close() {
+  kept_tls.stop();
+  kept_plain.stop();
+}
+
 // One request to the gateway; the JSON reply (or error body) lands in doc. keep reuses one
 // connection for the sync task's long runs of calls; anything else opens its own.
 static int call(const char *method, const String &path, const String &body, JsonDocument &doc,
                 const JsonDocument *filter = nullptr, bool keep = false) {
-  static NetworkClientSecure kept_tls;
-  static NetworkClient kept_plain;
-  static HTTPClient kept_http;
   NetworkClientSecure own_tls;
   NetworkClient own_plain;
   HTTPClient own_http;
@@ -113,8 +120,9 @@ static int call(const char *method, const String &path, const String &body, Json
     if (err && status < 300) status = -2;
   }
   http.end();
-  Serial.printf("{\"event\":\"http\",\"method\":\"%s\",\"path\":\"%s\",\"status\":%d,\"ms\":%lu,\"internal_largest\":%u}\n",
-                method, path.c_str(), status, millis() - start, heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+  Serial.printf("{\"event\":\"http\",\"method\":\"%s\",\"path\":\"%s\",\"status\":%d,\"ms\":%lu,\"internal_largest\":%u,\"internal_free\":%u}\n",
+                method, path.c_str(), status, millis() - start, heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
   return status;
 }
 

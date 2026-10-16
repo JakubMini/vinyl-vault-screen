@@ -61,20 +61,21 @@ static void progress(const char *step, int done, int total) {
 
 // One connection to Discogs' image host, kept open between covers: a TLS handshake costs more
 // than the download itself.
-static NetworkClientSecure cover_tls;
+static NetworkClientSecure *cover_tls;  // made on first use, once allocations go to PSRAM
 static HTTPClient cover_http;
 
 static uint8_t *download(const String &url, int &len) {
   static bool ready = false;
   if (!ready) {
-    cover_tls.useBuiltinCACertBundle();
+    cover_tls = new NetworkClientSecure;
+    cover_tls->useBuiltinCACertBundle();
     cover_http.setReuse(true);
     cover_http.setTimeout(15000);
     cover_http.setUserAgent("VinylVaultScreen/0.1 +https://github.com/JakubMini/vinyl-vault-screen");
     ready = true;
   }
   len = 0;
-  if (!cover_http.begin(cover_tls, url)) return nullptr;
+  if (!cover_http.begin(*cover_tls, url)) return nullptr;
   uint8_t *buf = nullptr;
   if (cover_http.GET() == 200 && (len = cover_http.getSize()) > 0 && len <= MAX_BYTES && (buf = (uint8_t *)ps_malloc(len))) {
     NetworkClient *stream = cover_http.getStreamPtr();
@@ -233,7 +234,7 @@ static void run() {
     if (ok) update([](SyncStatus &s) { s.covers_gen++; });
     made++;
   }
-  cover_tls.stop();  // so the next sync's gateway connection has the memory
+  if (cover_tls) cover_tls->stop();  // so the next sync's gateway connection has the memory
 
   const time_t now = time(nullptr);
   prefs.putULong64("last_ok", now);

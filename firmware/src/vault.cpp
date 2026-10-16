@@ -81,13 +81,14 @@ void vault_forget() {
   prefs.remove("token");
 }
 
-static NetworkClientSecure kept_tls;
+// Made on first use: a global would be built before setup() sends allocations to PSRAM.
+static NetworkClientSecure *kept_tls;
 static NetworkClient kept_plain;
 static HTTPClient kept_http;
 
 // An idle open connection still holds its TLS buffers, about 33 KB of internal RAM.
 void vault_close() {
-  kept_tls.stop();
+  if (kept_tls) kept_tls->stop();
   kept_plain.stop();
 }
 
@@ -98,7 +99,8 @@ static int call(const char *method, const String &path, const String &body, Json
   NetworkClientSecure own_tls;
   NetworkClient own_plain;
   HTTPClient own_http;
-  NetworkClientSecure &tls = keep ? kept_tls : own_tls;
+  if (keep && !kept_tls) kept_tls = new NetworkClientSecure;
+  NetworkClientSecure &tls = keep ? *kept_tls : own_tls;
   HTTPClient &http = keep ? kept_http : own_http;
 
   const String url = String(GATEWAY_URL) + path;

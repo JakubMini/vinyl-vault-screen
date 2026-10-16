@@ -78,6 +78,10 @@ ran at 5–7 frames a second. The wheel is drawn by hand instead:
 
 It runs at about 35 frames a second while spinning (30–42 depending on the build).
 
+**The look** follows the [vinyls page](https://jakubszypicyn.com/vinyls) of the personal site:
+its colours, type and record. The records and tonearm are drawn once at boot into PSRAM and never
+move, so they cost the wheel nothing (37 frames a second before and after).
+
 **What made it slow, and what fixed it.** The details are in the commit history. Each step came
 from a profile taken while the wheel spins itself (`-DWHEEL_BENCH`):
 
@@ -115,7 +119,7 @@ The pins and panel set-up are in [`firmware/src/board.cpp`](firmware/src/board.c
 | Display | [Arduino_GFX](https://github.com/moononournation/Arduino_GFX) | Ships this board's panel init sequence. |
 | Images | stb_image once, then [JPEGDEC](https://github.com/bitbank2/JPEGDEC) | Progressive originals once; fast baseline copies every time after. |
 | Storage | LittleFS (10 MB) + NVS | The collection and covers; Wi-Fi and the token. |
-| Fonts | [Montserrat](https://github.com/JulietaUla/Montserrat) (SIL OFL), via `lv_font_conv` | LVGL's built-in fonts have no £ and no accented letters. |
+| Fonts | [Funnel Sans and Display](https://fonts.google.com/specimen/Funnel+Sans), [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) (SIL OFL), via `lv_font_conv` | The type of [jakubszypicyn.com](https://jakubszypicyn.com/vinyls); LVGL's built-in fonts have no £ and no accented letters. |
 | Gateway | Cloudflare Worker, TypeScript, no framework | 30 lines. Free. Same account as the vault. |
 
 ## Run it

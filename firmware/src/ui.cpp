@@ -11,15 +11,22 @@
 #include "store.h"
 #include "sync.h"
 #include "vault.h"
+#include "record_art.h"
 #include "wheel.h"
 
 LV_FONT_DECLARE(font_16);
 LV_FONT_DECLARE(font_22);
 LV_FONT_DECLARE(font_30);
 LV_FONT_DECLARE(font_44);
+LV_FONT_DECLARE(font_mono_14);
 
-static const lv_color_t BG = lv_color_hex(0x101010), CHIP = lv_color_hex(0x2A2A2A), DIM = lv_color_hex(0x9A9A9A),
-                        ACCENT = lv_color_hex(0xF2A33A), UP = lv_color_hex(0x5CC97B), DOWN = lv_color_hex(0xE5675C);
+// The palette of jakubszypicyn.com, dark. Rules are pre-blended (the site's 25% and 12% white on BG):
+// LVGL blends opacity pixel by pixel in software.
+static const lv_color_t BG = lv_color_hex(0x0B0F0C), CHIP = lv_color_hex(0x181E1B), TEXT = lv_color_hex(0xF3F2EC),
+                        BODY = lv_color_hex(0xC5C7C1), DIM = lv_color_hex(0x9A9E98), RULE = lv_color_hex(0x454844),
+                        RULE_SOFT = lv_color_hex(0x262A26), METAL = lv_color_hex(0xA9ADA7), PART = lv_color_hex(0x3C403A),
+                        ACCENT = lv_color_hex(0x2FF27C), EYEBROW = lv_color_hex(0x1CB35A), UP = lv_color_hex(0x5FD98F),
+                        DOWN = lv_color_hex(0xEF7FA3);
 
 static std::vector<Record> records;
 static std::map<int, Detail> details;  // each record's history and prices, by id
@@ -36,7 +43,7 @@ static void open_wheel();
 static lv_obj_t *screen() {
   lv_obj_t *s = lv_obj_create(nullptr);
   lv_obj_set_style_bg_color(s, BG, 0);
-  lv_obj_set_style_text_color(s, lv_color_white(), 0);
+  lv_obj_set_style_text_color(s, TEXT, 0);
   lv_obj_set_style_text_font(s, &font_22, 0);
   lv_obj_set_scrollable(s, false);
   return s;
@@ -53,16 +60,49 @@ static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, lv_color_t color
   return l;
 }
 
+// An outline pill, filled while pressed.
 static lv_obj_t *button(lv_obj_t *parent, const char *text, int32_t w, int32_t h) {
   lv_obj_t *b = lv_button_create(parent);
   lv_obj_set_size(b, w, h);
-  lv_obj_set_style_bg_color(b, CHIP, 0);
+  lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_STATE_PRESSED);
+  lv_obj_set_style_bg_color(b, CHIP, LV_STATE_PRESSED);
+  lv_obj_set_style_border_width(b, 1, 0);
+  lv_obj_set_style_border_color(b, RULE, 0);
+  lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_shadow_width(b, 0, 0);
   lv_obj_t *t = lv_label_create(b);
   lv_obj_set_style_text_font(t, &font_16, 0);
   lv_label_set_text(t, text);
   lv_obj_center(t);
   return b;
+}
+
+// The green line above a heading, as on the site.
+static lv_obj_t *eyebrow(lv_obj_t *parent, const char *text) {
+  lv_obj_t *l = label(parent, &font_16, EYEBROW, 300);
+  lv_label_set_text(l, text);
+  lv_obj_set_pos(l, 16, 18);
+  return l;
+}
+
+static lv_obj_t *rule(lv_obj_t *parent, int32_t y, lv_color_t color) {
+  lv_obj_t *r = lv_obj_create(parent);
+  lv_obj_remove_style_all(r);
+  lv_obj_set_size(r, 448, 1);
+  lv_obj_set_pos(r, 16, y);
+  lv_obj_set_style_bg_color(r, color, 0);
+  lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
+  return r;
+}
+
+// A mono readout ("33.3 rpm", "012 / 161"), at the left of the screen or, if right, its right.
+static lv_obj_t *readout(lv_obj_t *parent, int32_t y, bool right, const char *text) {
+  lv_obj_t *l = label(parent, &font_mono_14, DIM, 220);
+  lv_label_set_text(l, text);
+  if (right) lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_obj_set_pos(l, right ? 244 : 16, y);
+  return l;
 }
 
 // One screen at a time. The old one is deleted later, never inside its own event handler: a tap
@@ -91,14 +131,59 @@ static void set_change(lv_obj_t *l, int pence) {
   lv_obj_set_style_text_color(l, pence > 0 ? UP : DOWN, 0);
 }
 
-static lv_obj_t *message(const char *text) {
-  lv_obj_t *s = screen();
-  lv_obj_t *l = label(s, &font_22, lv_color_white(), 400);
+static lv_image_dsc_t vinyl, disc, platter;  // records: the wheel's placeholder, the record screen's, the big one
+
+static lv_obj_t *wrapped(lv_obj_t *parent, const lv_font_t *font, lv_color_t color, const char *text) {
+  lv_obj_t *l = label(parent, font, color, 448);
   lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
   lv_obj_set_height(l, LV_SIZE_CONTENT);
-  lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
   lv_label_set_text(l, text);
-  lv_obj_center(l);
+  return l;
+}
+
+// A filled circle centred on (x, y).
+static lv_obj_t *dot(lv_obj_t *parent, int32_t x, int32_t y, int32_t size, lv_color_t color) {
+  lv_obj_t *d = lv_obj_create(parent);
+  lv_obj_remove_style_all(d);
+  lv_obj_set_size(d, size, size);
+  lv_obj_set_pos(d, x - size / 2, y - size / 2);
+  lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(d, color, 0);
+  lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
+  return d;
+}
+
+// The turntable from jakubszypicyn.com/vinyls: the record and its arm, needle down, or lifted
+// when something is wrong. It never turns, so it costs nothing after it is first drawn.
+static void turntable(lv_obj_t *s, bool playing) {
+  lv_obj_t *rec = lv_image_create(s);
+  lv_image_set_src(rec, &platter);
+  lv_obj_set_pos(rec, 100, 20);  // centre (220, 140), radius 120
+  static const lv_point_precise_t down[] = {{408, 28}, {318, 206}}, up[] = {{408, 28}, {428, 230}};
+  const lv_point_precise_t *at = playing ? down : up;
+  lv_obj_t *arm = lv_line_create(s);
+  lv_line_set_points(arm, at, 2);
+  lv_obj_set_style_line_width(arm, 4, 0);
+  lv_obj_set_style_line_color(arm, METAL, 0);
+  lv_obj_set_style_line_rounded(arm, true, 0);
+  lv_obj_t *pivot = dot(s, 408, 28, 22, PART);
+  lv_obj_set_style_border_color(pivot, METAL, 0);
+  lv_obj_set_style_border_width(pivot, 2, 0);
+  dot(s, at[1].x, at[1].y, 10, ACCENT);  // the stylus
+}
+
+// The first line is the heading, the rest goes under it.
+static lv_obj_t *message(const char *text, bool trouble = false) {
+  lv_obj_t *s = screen();
+  turntable(s, !trouble);
+  rule(s, 292, RULE);
+  readout(s, 300, false, trouble ? "00.0 rpm" : "33.3 rpm");
+  lv_obj_t *state = readout(s, 300, true, trouble ? "offline" : "power on");
+  if (trouble) lv_obj_set_style_text_color(state, DOWN, 0);
+  const char *nl = strchr(text, '\n');
+  lv_obj_t *head = wrapped(s, &font_30, TEXT, nl ? String(text).substring(0, nl - text).c_str() : text);
+  lv_obj_set_pos(head, 16, 334);
+  if (nl) lv_obj_align_to(wrapped(s, &font_16, BODY, nl + 1), head, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 8);
   show(s);
   lv_refr_now(nullptr);  // the caller may be about to block on the network; draw this first
   return s;
@@ -106,7 +191,7 @@ static lv_obj_t *message(const char *text) {
 
 // A message that retries on a tap and offers other Wi-Fi on a long press.
 static void problem(const char *text, void (*retry)()) {
-  lv_obj_t *s = message(text);
+  lv_obj_t *s = message(text, true);
   lv_obj_add_event_cb(s, [](lv_event_t *e) { ((void (*)())lv_event_get_user_data(e))(); }, LV_EVENT_SHORT_CLICKED,
                       (void *)retry);
   lv_obj_add_event_cb(s, [](lv_event_t *) { open_wifi(); }, LV_EVENT_LONG_PRESSED, nullptr);
@@ -120,34 +205,34 @@ static bool unlinked(int status) {
   return true;
 }
 
-// ---- the vinyl placeholder, shown until a cover is cached -------------------------------------
+// ---- the records, drawn once at boot ---------------------------------------------------------
 
-static lv_image_dsc_t vinyl;
-
-static void draw_vinyl() {
-  const int n = WHEEL_FRONT_PX;
+// An n x n RGB565 record in PSRAM, inset by `margin` on a square of `outside`. No alpha and drawn at
+// its own size, so LVGL only copies it.
+static void draw_record(lv_image_dsc_t &img, int n, int margin, uint16_t outside) {
   uint16_t *px = (uint16_t *)ps_malloc(n * n * 2);
   for (int y = 0; y < n; y++) {
-    for (int x = 0; x < n; x++) {
-      const float r = hypotf(x - n / 2 + 0.5f, y - n / 2 + 0.5f);
-      uint16_t c = 0x2945;                                  // sleeve grey
-      if (r < n * 0.47f) c = ((int)r / 5) % 2 ? 0x0861 : 0x0841;  // grooves
-      if (r < n * 0.16f) c = 0xF506;                        // label, the accent colour
-      if (r < 4) c = 0x0841;                                // spindle hole
-      px[y * n + x] = c;
-    }
+    for (int x = 0; x < n; x++) px[y * n + x] = record_px(x - margin, y - margin, n - 2 * margin, outside);
   }
-  vinyl.header.magic = LV_IMAGE_HEADER_MAGIC;
-  vinyl.header.cf = LV_COLOR_FORMAT_RGB565;
-  vinyl.header.w = vinyl.header.h = n;
-  vinyl.header.stride = n * 2;
-  vinyl.data_size = n * n * 2;
-  vinyl.data = (const uint8_t *)px;
+  img.header.magic = LV_IMAGE_HEADER_MAGIC;
+  img.header.cf = LV_COLOR_FORMAT_RGB565;
+  img.header.w = img.header.h = n;
+  img.header.stride = n * 2;
+  img.data_size = n * n * 2;
+  img.data = (const uint8_t *)px;
 }
 
 static const lv_image_dsc_t *cover_of(const Record &r) {
   const lv_image_dsc_t *c = covers_get(r.id);
   return c ? c : &vinyl;
+}
+
+// "012 / 161": the record's place in the crate, padded to the width of the count, as on the site.
+static String count_text(int index) {
+  const int n = records.size();
+  char text[24];
+  snprintf(text, sizeof text, "%0*d / %d", (int)String(n).length(), index + 1, n);
+  return text;
 }
 
 // ---- record ------------------------------------------------------------------------------------
@@ -175,9 +260,15 @@ static void paint_detail() {
   }
   lv_chart_refresh(view.chart);
 
+  // The chosen grade is solid green with dark text.
+  auto mark = [](lv_obj_t *chip, bool on) {
+    lv_obj_set_style_bg_color(chip, on ? ACCENT : CHIP, 0);
+    lv_obj_set_style_text_color(chip, on ? BG : TEXT, 0);
+    if (lv_obj_get_child_count(chip) > 1) lv_obj_set_style_text_color(lv_obj_get_child(chip, 1), on ? BG : DIM, 0);
+  };
   for (int g = 0; g < GRADE_COUNT; g++) {
-    lv_obj_set_style_bg_color(view.media[g], r.media == GRADES[g] ? ACCENT : CHIP, 0);
-    lv_obj_set_style_bg_color(view.sleeve[g], r.sleeve == GRADES[g] ? ACCENT : CHIP, 0);
+    mark(view.media[g], r.media == GRADES[g]);
+    mark(view.sleeve[g], r.sleeve == GRADES[g]);
     lv_label_set_text(lv_obj_get_child(view.media[g], 1), money(view.detail.price_by_grade[g]).c_str());
   }
 }
@@ -227,7 +318,7 @@ static void chip_row(lv_obj_t *parent, int y, int height, int code_base, lv_obj_
     lv_obj_align(grade, LV_ALIGN_CENTER, 0, with_price ? -10 : 0);
     if (with_price) {
       lv_obj_t *price = lv_label_create(c);
-      lv_obj_set_style_text_font(price, &font_16, 0);
+      lv_obj_set_style_text_font(price, &font_mono_14, 0);
       lv_obj_align(price, LV_ALIGN_CENTER, 0, 13);
     }
     chips[g] = c;
@@ -256,35 +347,42 @@ static void open_record(int index) {
     if (dir == LV_DIR_RIGHT || dir == LV_DIR_BOTTOM) open_wheel();
   }, LV_EVENT_GESTURE, nullptr);
 
+  lv_obj_t *close = button(s, "‹", 40, 40);
+  lv_obj_set_style_text_font(lv_obj_get_child(close, 0), &font_22, 0);
+  lv_obj_set_pos(close, 16, 8);
+  lv_obj_add_event_cb(close, back, LV_EVENT_CLICKED, nullptr);
+  lv_obj_set_x(eyebrow(s, "Now playing"), 68);
+  readout(s, 19, true, count_text(index).c_str());
+
+  // The record slides out of its sleeve: the disc first, the cover over it.
+  lv_obj_t *record = lv_image_create(s);
+  lv_image_set_src(record, &disc);
+  lv_obj_set_pos(record, 134, 64);
   lv_obj_t *cover = lv_image_create(s);
   const lv_image_dsc_t *img = cover_of(r);
   lv_image_set_src(cover, img);
-  lv_image_set_scale(cover, 150 * 256 / img->header.w);
-  lv_obj_set_size(cover, 150, 150);
+  lv_image_set_scale(cover, 144 * 256 / img->header.w);
+  lv_obj_set_size(cover, 144, 144);
   lv_image_set_inner_align(cover, LV_IMAGE_ALIGN_CENTER);
-  lv_obj_set_pos(cover, 16, 52);
+  lv_obj_set_pos(cover, 16, 64);
   lv_obj_set_clickable(cover, true);
   lv_obj_add_event_cb(cover, back, LV_EVENT_CLICKED, nullptr);
 
-  lv_obj_t *close = button(s, "‹  Back", 110, 40);
-  lv_obj_set_pos(close, 16, 6);
-  lv_obj_add_event_cb(close, back, LV_EVENT_CLICKED, nullptr);
-
-  lv_obj_t *artist = label(s, &font_22, lv_color_white(), 282);
+  lv_obj_t *artist = label(s, &font_22, TEXT, 174);
   lv_label_set_text(artist, r.artist.c_str());
-  lv_obj_set_pos(artist, 182, 52);
-  lv_obj_t *title = label(s, &font_16, DIM, 282);
+  lv_obj_set_pos(artist, 290, 66);
+  lv_obj_t *title = label(s, &font_16, DIM, 174);
   const String line = r.title + (r.year ? " · " + String(r.year) : "");
   lv_label_set_text(title, line.c_str());
-  lv_obj_set_pos(title, 182, 82);
-  view.value = label(s, &font_44, lv_color_white(), 282);
-  lv_obj_set_pos(view.value, 182, 110);
-  view.change = label(s, &font_16, DIM, 282);
-  lv_obj_set_pos(view.change, 182, 164);
+  lv_obj_set_pos(title, 290, 94);
+  view.value = label(s, &font_44, TEXT, 174);
+  lv_obj_set_pos(view.value, 290, 120);
+  view.change = label(s, &font_16, DIM, 174);
+  lv_obj_set_pos(view.change, 290, 178);
 
   view.chart = lv_chart_create(s);
-  lv_obj_set_size(view.chart, 448, 60);
-  lv_obj_set_pos(view.chart, 16, 212);
+  lv_obj_set_size(view.chart, 448, 74);
+  lv_obj_set_pos(view.chart, 16, 216);
   lv_chart_set_type(view.chart, LV_CHART_TYPE_LINE);
   lv_chart_set_div_line_count(view.chart, 0, 0);
   lv_obj_set_style_bg_opa(view.chart, LV_OPA_TRANSP, 0);
@@ -293,18 +391,19 @@ static void open_record(int index) {
   lv_obj_set_style_line_width(view.chart, 3, LV_PART_ITEMS);
   lv_obj_set_style_size(view.chart, 0, 0, LV_PART_INDICATOR);
   lv_chart_add_series(view.chart, ACCENT, LV_CHART_AXIS_PRIMARY_Y);
+  rule(s, 290, RULE_SOFT);
 
   lv_obj_t *media = label(s, &font_16, DIM, 448);
   lv_label_set_text(media, "Record grade · price at each grade");
-  lv_obj_set_pos(media, 16, 280);
-  chip_row(s, 302, 62, 0, view.media, true);
+  lv_obj_set_pos(media, 16, 298);
+  chip_row(s, 320, 62, 0, view.media, true);
   lv_obj_t *sleeve = label(s, &font_16, DIM, 448);
   lv_label_set_text(sleeve, "Sleeve grade");
-  lv_obj_set_pos(sleeve, 16, 374);
-  chip_row(s, 396, 46, GRADE_COUNT, view.sleeve, false);
-  view.status = label(s, &font_16, DIM, 448);
+  lv_obj_set_pos(sleeve, 16, 390);
+  chip_row(s, 412, 46, GRADE_COUNT, view.sleeve, false);
+  view.status = label(s, &font_mono_14, DIM, 448);
   lv_label_set_text(view.status, "");
-  lv_obj_set_pos(view.status, 16, 452);
+  lv_obj_set_pos(view.status, 16, 462);
 
   paint_detail();
   show(s);
@@ -322,7 +421,7 @@ extern uint32_t profile_loop_us, profile_touch_us;  // main.cpp, board.cpp
 constexpr int POOL = 7;                       // covers drawn: the front, three before and three after
 constexpr int BAND_TOP = 56, BAND_BOTTOM = 290;  // the rows the wheel owns
 constexpr int STRIP = 16;                     // rows built at a time (internal RAM, 15 KB)
-static const uint16_t BG565 = 0x1082;         // BG as RGB565
+static const uint16_t BG565 = 0x0861;         // BG as RGB565
 
 static struct {
   float pos = 0;          // the record at the front, fractional while turning
@@ -338,9 +437,9 @@ static struct {
   const lv_image_dsc_t *shown[POOL];
   uint16_t *strip;
   Span drawn[BAND_BOTTOM - BAND_TOP];  // per band row, the columns covers took last frame
-  lv_obj_t *artist, *title, *value, *change, *count, *fps;
+  lv_obj_t *artist, *title, *value, *grade, *change, *track, *needle, *sync, *count, *fps;
   lv_timer_t *timer;
-  String count_text;
+  String sync_text;
 } wheel;
 
 static void want_covers_around(int front) {
@@ -356,7 +455,7 @@ static void want_covers_around(int front) {
 
 static String status_text() {
   const SyncStatus s = sync_status();
-  String text = String(wheel.front + 1) + " / " + String(records.size()) + "  ·  ";
+  String text;
   if (s.running) {
     text += String(s.step) + " " + String(s.done) + "/" + String(s.total);
   } else if (s.failed) {
@@ -485,8 +584,15 @@ static void update_front() {
   const Record &r = records[front];
   lv_label_set_text(wheel.artist, r.artist.c_str());
   lv_label_set_text(wheel.title, r.title.c_str());
-  lv_label_set_text(wheel.value, r.value.isEmpty() ? "Not priced" : (r.value + " · " + r.media).c_str());
+  lv_label_set_text(wheel.value, r.value.isEmpty() ? "Not priced" : r.value.c_str());
+  lv_label_set_text(wheel.grade, r.media.c_str());
+  lv_obj_set_hidden(wheel.grade, r.media.isEmpty());
   set_change(wheel.change, r.change30);
+  // The needle tracks across the side: how far through the crate the front record is.
+  const int x = 16 + 448 * front / max(1, n - 1);
+  lv_obj_set_width(wheel.track, x - 16);
+  lv_obj_set_x(wheel.needle, x - 4);
+  lv_label_set_text(wheel.count, count_text(front).c_str());
   wheel.status_ms = 0;
   want_covers_around(front);
 }
@@ -549,12 +655,13 @@ static void tick(lv_timer_t *) {
   if (now - wheel.status_ms > 1000) {
     wheel.status_ms = now;
     const String text = status_text();
-    if (text != wheel.count_text) lv_label_set_text(wheel.count, (wheel.count_text = text).c_str());
+    if (text != wheel.sync_text) lv_label_set_text(wheel.sync, (wheel.sync_text = text).c_str());
   }
   if (now - wheel.fps_ms >= 1000) {
     const int f = max(1, wheel.frames);
-    const int ms = wheel.frame_us / f / 1000;
-    lv_label_set_text_fmt(wheel.fps, "%d fps · %d ms", wheel.frames, ms);
+#ifdef WHEEL_BENCH
+    lv_label_set_text_fmt(wheel.fps, "%d fps · %d ms", wheel.frames, wheel.frame_us / f / 1000);
+#endif
     // Profiling: where the last second went. loop is all of lv_timer_handler, wheel frames
     // included; touch is the GT911 reads inside it.
     if (wheel.frames) {
@@ -608,7 +715,7 @@ static void touched(lv_event_t *e) {
 static void open_wheel() {
   lv_obj_t *s = screen();
   wheel.front = -1;
-  wheel.count_text = "";
+  wheel.sync_text = "";
   wheel.records_gen = sync_status().records_gen;
   // LVGL paints the whole new screen, band included, on its next refresh: draw over it after.
   wheel.repaint = 3;
@@ -616,29 +723,49 @@ static void open_wheel() {
   if (isnan(wheel.target)) wheel.target = roundf(wheel.pos);
   for (auto &shown : wheel.shown) shown = nullptr;
 
-  wheel.count = label(s, &font_16, DIM, 330);
-  lv_obj_set_pos(wheel.count, 16, 18);
-  lv_obj_t *refresh = button(s, "Refresh", 100, 40);
-  lv_obj_align(refresh, LV_ALIGN_TOP_RIGHT, -12, 8);
+  eyebrow(s, "The crate");
+  lv_obj_t *refresh = button(s, LV_SYMBOL_REFRESH, 40, 40);
+  lv_obj_set_style_text_font(lv_obj_get_child(refresh, 0), &lv_font_montserrat_20, 0);
+  lv_obj_align(refresh, LV_ALIGN_TOP_RIGHT, -16, 8);
   lv_obj_add_event_cb(refresh, [](lv_event_t *) {
     sync_now();
     wheel.status_ms = 0;
   }, LV_EVENT_CLICKED, nullptr);
 
-  wheel.artist = label(s, &font_22, lv_color_white(), 420);
-  wheel.title = label(s, &font_16, DIM, 420);
-  wheel.value = label(s, &font_30, ACCENT, 420);
-  wheel.change = label(s, &font_16, DIM, 420);
-  int y = 300;
-  for (lv_obj_t *l : {wheel.artist, wheel.title, wheel.value, wheel.change}) {
-    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(l, LV_ALIGN_TOP_MID, 0, y);
-    y += lv_font_get_line_height(lv_obj_get_style_text_font(l, LV_PART_MAIN)) + 6;
-  }
-  wheel.fps = label(s, &font_16, DIM, 200);  // the frame-rate readout, for tuning
-  lv_obj_align(wheel.fps, LV_ALIGN_BOTTOM_RIGHT, 0, -4);
-  lv_obj_set_style_text_align(wheel.fps, LV_TEXT_ALIGN_RIGHT, 0);
-  lv_obj_set_style_text_color(wheel.fps, lv_color_hex(0x5A5A5A), 0);
+  // Below the band, from y 300: nothing here may reach into the rows the wheel draws.
+  wheel.artist = label(s, &font_30, TEXT, 448);
+  lv_obj_set_pos(wheel.artist, 16, 300);
+  wheel.title = label(s, &font_16, DIM, 448);
+  lv_obj_set_pos(wheel.title, 16, 338);
+  lv_obj_t *row = lv_obj_create(s);  // the price, then the record's grade in an outline pill
+  lv_obj_remove_style_all(row);
+  lv_obj_set_size(row, 448, 35);
+  lv_obj_set_pos(row, 16, 364);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(row, 12, 0);
+  wheel.value = label(row, &font_30, ACCENT, LV_SIZE_CONTENT);
+  wheel.grade = label(row, &font_16, BODY, LV_SIZE_CONTENT);
+  lv_obj_set_height(wheel.grade, LV_SIZE_CONTENT);
+  lv_obj_set_style_border_width(wheel.grade, 1, 0);
+  lv_obj_set_style_border_color(wheel.grade, RULE, 0);
+  lv_obj_set_style_radius(wheel.grade, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_pad_hor(wheel.grade, 10, 0);
+  lv_obj_set_style_pad_ver(wheel.grade, 3, 0);
+  wheel.change = label(s, &font_16, DIM, 448);
+  lv_obj_set_pos(wheel.change, 16, 404);
+
+  rule(s, 440, RULE);
+  wheel.track = rule(s, 439, ACCENT);
+  lv_obj_set_height(wheel.track, 3);
+  wheel.needle = dot(s, 16, 440, 9, ACCENT);
+  wheel.sync = readout(s, 452, false, "");
+  wheel.count = readout(s, 452, true, "");
+#ifdef WHEEL_BENCH
+  wheel.fps = label(s, &font_mono_14, DIM, 200);  // the frame-rate readout, for tuning
+  lv_obj_align(wheel.fps, LV_ALIGN_TOP_MID, 0, 19);
+  lv_obj_set_style_text_align(wheel.fps, LV_TEXT_ALIGN_CENTER, 0);
+#endif
 
   for (lv_event_code_t code : {LV_EVENT_PRESSED, LV_EVENT_PRESSING, LV_EVENT_RELEASED}) {
     lv_obj_add_event_cb(s, touched, code, nullptr);
@@ -664,31 +791,34 @@ static void open_link() {
                    open_link);
   }
   lv_obj_t *s = screen();
-  lv_obj_t *head = label(s, &font_30, lv_color_white(), 448);
-  lv_obj_set_style_text_align(head, LV_TEXT_ALIGN_CENTER, 0);
+  eyebrow(s, "First spin");
+  lv_obj_t *head = label(s, &font_30, TEXT, 448);
   lv_label_set_text(head, "Link this screen");
-  lv_obj_align(head, LV_ALIGN_TOP_MID, 0, 20);
+  lv_obj_set_pos(head, 16, 42);
 
+  // The QR code is the sleeve, with the record half out of it.
+  lv_obj_t *rec = lv_image_create(s);
+  lv_image_set_src(rec, &platter);
+  lv_obj_set_pos(rec, 180, 72);
   lv_obj_t *qr = lv_qrcode_create(s);
-  lv_qrcode_set_size(qr, 200);
+  lv_qrcode_set_size(qr, 192);
   lv_qrcode_set_dark_color(qr, lv_color_black());
-  lv_qrcode_set_light_color(qr, lv_color_white());
+  lv_qrcode_set_light_color(qr, TEXT);
   lv_qrcode_update(qr, link_code.url.c_str(), link_code.url.length());
-  lv_obj_set_style_border_color(qr, lv_color_white(), 0);
+  lv_obj_set_style_border_color(qr, TEXT, 0);
   lv_obj_set_style_border_width(qr, 8, 0);
-  lv_obj_align(qr, LV_ALIGN_TOP_MID, 0, 72);
+  lv_obj_set_pos(qr, 72, 88);
 
   lv_obj_t *code = label(s, &font_44, ACCENT, 448);
-  lv_obj_set_style_text_align(code, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_letter_space(code, 2, 0);
   lv_label_set_text(code, link_code.user_code.c_str());
-  lv_obj_align(code, LV_ALIGN_TOP_MID, 0, 300);
-
-  lv_obj_t *hint = label(s, &font_16, DIM, 420);
-  lv_label_set_long_mode(hint, LV_LABEL_LONG_MODE_WRAP);
-  lv_obj_set_height(hint, LV_SIZE_CONTENT);
-  lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
-  lv_label_set_text(hint, "Scan with your phone and approve, or open\nvault.jakubszypicyn.com/link and type the code.");
-  lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, 370);
+  lv_obj_set_pos(code, 16, 318);
+  lv_obj_set_pos(wrapped(s, &font_16, BODY,
+                         "Scan with your phone and approve, or open\nvault.jakubszypicyn.com/link and type the code."),
+                 16, 376);
+  rule(s, 440, RULE);
+  readout(s, 452, false, "00.0 rpm");
+  readout(s, 452, true, "waiting for approval");
 
   lv_timer_t *poll = lv_timer_create([](lv_timer_t *t) {
     switch (vault_poll_link(link_code)) {
@@ -713,25 +843,41 @@ static void open_wifi() {
   message("Looking for Wi-Fi networks…");
   const std::vector<String> networks = wifi_scan();
   lv_obj_t *s = screen();
-  lv_obj_t *head = label(s, &font_30, lv_color_white(), 448);
-  lv_label_set_text(head, "Choose Wi-Fi");
-  lv_obj_set_pos(head, 16, 16);
+  eyebrow(s, "Side A · Wi-Fi");
+  lv_obj_t *head = label(s, &font_30, TEXT, 448);
+  lv_label_set_text(head, "Choose a network");
+  lv_obj_set_pos(head, 16, 42);
 
+  // The networks as a side's tracks, A1, A2…, as in the site's menu.
   lv_obj_t *list = lv_obj_create(s);
-  lv_obj_set_size(list, 448, 330);
-  lv_obj_set_pos(list, 16, 64);
+  lv_obj_set_size(list, 448, 300);
+  lv_obj_set_pos(list, 16, 92);
   lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(list, 0, 0);
-  lv_obj_set_style_pad_row(list, 8, 0);
+  lv_obj_set_style_pad_row(list, 0, 0);
   lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(list, 0, 0);
-  for (const String &ssid : networks) {
-    lv_obj_t *b = button(list, ssid.c_str(), 448, 52);
-    lv_obj_t *t = lv_obj_get_child(b, 0);
-    lv_obj_set_style_text_font(t, &font_22, 0);
-    lv_obj_align(t, LV_ALIGN_LEFT_MID, 8, 0);
-    lv_obj_add_event_cb(b, [](lv_event_t *e) {
-      wifi_ssid = lv_label_get_text(lv_obj_get_child(lv_event_get_target_obj(e), 0));
+  for (size_t i = 0; i < networks.size(); i++) {
+    lv_obj_t *row = lv_obj_create(list);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, 448, 52);
+    lv_obj_set_clickable(row, true);
+    lv_obj_set_style_bg_color(row, CHIP, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(row, 1, 0);
+    lv_obj_set_style_border_color(row, RULE_SOFT, 0);
+    lv_obj_t *track = label(row, &font_mono_14, DIM, 40);
+    lv_label_set_text_fmt(track, "A%u", (unsigned)i + 1);
+    lv_obj_align(track, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_t *name = label(row, &font_22, TEXT, 370);
+    lv_label_set_text(name, networks[i].c_str());
+    lv_obj_align(name, LV_ALIGN_LEFT_MID, 44, 0);
+    lv_obj_t *more = label(row, &font_22, DIM, 20);
+    lv_label_set_text(more, "›");
+    lv_obj_align(more, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_add_event_cb(row, [](lv_event_t *e) {
+      wifi_ssid = lv_label_get_text(lv_obj_get_child(lv_event_get_target_obj(e), 1));
       open_password(nullptr);
     }, LV_EVENT_CLICKED, nullptr);
   }
@@ -758,7 +904,7 @@ static void keyboard_done(lv_event_t *e) {
 
 static void open_password(const char *error) {
   lv_obj_t *s = screen();
-  lv_obj_t *head = label(s, &font_22, lv_color_white(), 448);
+  lv_obj_t *head = label(s, &font_22, TEXT, 448);
   lv_label_set_text_fmt(head, "Password for %s", wifi_ssid.c_str());
   lv_obj_set_pos(head, 16, 16);
   lv_obj_t *note = label(s, &font_16, error ? DOWN : DIM, 448);
@@ -807,7 +953,11 @@ static void start() {
 }
 
 void ui_begin() {
-  draw_vinyl();
+  // Dark, with the site's green: the keyboard, text field and pressed states follow it.
+  lv_display_set_theme(nullptr, lv_theme_default_init(lv_display_get_default(), ACCENT, DOWN, true, &font_16));
+  draw_record(vinyl, WHEEL_FRONT_PX, 6, 0x18E3);  // the placeholder cover: a record on a CHIP sleeve
+  draw_record(disc, 144, 0, ART_BG);
+  draw_record(platter, 240, 0, ART_BG);
   String ssid;
   if (!wifi_saved(ssid)) return open_wifi();
   message(("Joining " + ssid + "…").c_str());

@@ -37,6 +37,7 @@ std::vector<String> wifi_scan();                            // nearby networks, 
 
 bool vault_linked();     // a device token is stored
 void vault_forget();     // drop the token, e.g. after a 401
+void vault_close();      // close the connection the sync's calls keep open
 
 int vault_start_link(LinkCode &code);
 LinkState vault_poll_link(const LinkCode &code);

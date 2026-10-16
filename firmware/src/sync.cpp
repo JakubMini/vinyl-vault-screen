@@ -61,22 +61,24 @@ static void progress(const char *step, int done, int total) {
 
 // One connection to Discogs' image host, kept open between covers: a TLS handshake costs more
 // than the download itself.
+static NetworkClientSecure *cover_tls;  // made on first use, once allocations go to PSRAM
+static HTTPClient cover_http;
+
 static uint8_t *download(const String &url, int &len) {
-  static NetworkClientSecure tls;
-  static HTTPClient http;
   static bool ready = false;
   if (!ready) {
-    tls.useBuiltinCACertBundle();
-    http.setReuse(true);
-    http.setTimeout(15000);
-    http.setUserAgent("VinylVaultScreen/0.1 +https://github.com/JakubMini/vinyl-vault-screen");
+    cover_tls = new NetworkClientSecure;
+    cover_tls->useBuiltinCACertBundle();
+    cover_http.setReuse(true);
+    cover_http.setTimeout(15000);
+    cover_http.setUserAgent("VinylVaultScreen/0.1 +https://github.com/JakubMini/vinyl-vault-screen");
     ready = true;
   }
   len = 0;
-  if (!http.begin(tls, url)) return nullptr;
+  if (!cover_http.begin(*cover_tls, url)) return nullptr;
   uint8_t *buf = nullptr;
-  if (http.GET() == 200 && (len = http.getSize()) > 0 && len <= MAX_BYTES && (buf = (uint8_t *)ps_malloc(len))) {
-    NetworkClient *stream = http.getStreamPtr();
+  if (cover_http.GET() == 200 && (len = cover_http.getSize()) > 0 && len <= MAX_BYTES && (buf = (uint8_t *)ps_malloc(len))) {
+    NetworkClient *stream = cover_http.getStreamPtr();
     int got = 0;
     for (const uint32_t deadline = millis() + 15000; got < len && millis() < deadline;) {
       const int n = stream->read(buf + got, len - got);
@@ -89,40 +91,70 @@ static uint8_t *download(const String &url, int &len) {
       buf = nullptr;
     }
   }
-  http.end();
+  cover_http.end();
   return buf;
 }
 
-// Area-average down to at most COVER_PX a side, then encode as a baseline JPEG, which the
-// screen decodes in a few milliseconds (Discogs' progressive originals take about a second).
-static bool make_cover(const Record &r) {
-  int len = 0;
-  uint8_t *src = r.cover.isEmpty() ? nullptr : download(r.cover, len);
-  if (!src) return false;
-  int w, h, n;
-  uint8_t *rgb = stbi_load_from_memory(src, len, &w, &h, &n, 3);
-  free(src);
-  if (!rgb) return false;
+static uint8_t clamp8(float v) { return v < 0 ? 0 : v > 255 ? 255 : (uint8_t)lroundf(v); }
 
-  const float s = std::max(1.0f, std::max(w, h) / (float)COVER_PX);
-  const int ow = std::max(1, (int)lroundf(w / s)), oh = std::max(1, (int)lroundf(h / s));
-  uint8_t *out = (uint8_t *)ps_malloc(ow * oh * 3);
-  bool ok = false;
-  if (out) {
-    for (int y = 0; y < oh; y++) {
+// Decode and area-average down to at most COVER_PX a side, as RGB888 stored blue first (the
+// camera library's order). A progressive 600 px Discogs cover keeps 2 MB of coefficients until
+// stb_image is done, and stb_image then makes a full-size RGB copy: more PSRAM than is free.
+// So this stops at stb_image's planes, drops the coefficients and averages each plane directly.
+static uint8_t *shrink(const uint8_t *src, int len, int &ow, int &oh) {
+  stbi__context ctx;
+  stbi__start_mem(&ctx, src, len);
+  ctx.img_n = 0;  // makes the cleanup safe if the header never arrives
+  stbi__jpeg *j = (stbi__jpeg *)ps_calloc(1, sizeof(stbi__jpeg));
+  if (!j) return nullptr;
+  j->s = &ctx;
+  stbi__setup_jpeg(j);
+  uint8_t *out = nullptr;
+  const int n = stbi__decode_jpeg_image(j) ? ctx.img_n : 0;
+  // Grey or YCbCr; the rare RGB or CMYK JPEG goes without a cover.
+  const bool ycc = n == 3 && j->rgb != 3 && (j->app14_color_transform != 0 || j->jfif);
+  if (n == 1 || ycc) {
+    for (int k = 0; k < n; k++) free(j->img_comp[k].raw_coeff), j->img_comp[k].raw_coeff = nullptr;
+    const int w = ctx.img_x, h = ctx.img_y;
+    const float s = std::max(1.0f, std::max(w, h) / (float)COVER_PX);
+    ow = std::max(1, (int)lroundf(w / s)), oh = std::max(1, (int)lroundf(h / s));
+    out = (uint8_t *)ps_malloc(ow * oh * 3);
+    for (int y = 0; out && y < oh; y++) {
       const int y0 = y * s, y1 = std::min(h, std::max(y0 + 1, (int)((y + 1) * s)));
       for (int x = 0; x < ow; x++) {
         const int x0 = x * s, x1 = std::min(w, std::max(x0 + 1, (int)((x + 1) * s)));
-        uint32_t sum[3] = {0, 0, 0}, count = (y1 - y0) * (x1 - x0);
-        for (int yy = y0; yy < y1; yy++) {
-          const uint8_t *p = rgb + (yy * w + x0) * 3;
-          for (int xx = x0; xx < x1; xx++, p += 3) sum[0] += p[0], sum[1] += p[1], sum[2] += p[2];
+        float v[3] = {0, 128, 128};
+        for (int k = 0; k < n; k++) {
+          const auto &c = j->img_comp[k];
+          const int hs = j->img_h_max / c.h, vs = j->img_v_max / c.v;  // chroma may be subsampled
+          uint32_t sum = 0, count = 0;
+          for (int yy = y0 / vs; yy <= (y1 - 1) / vs; yy++) {
+            for (int xx = x0 / hs; xx <= (x1 - 1) / hs; xx++) sum += c.data[yy * c.w2 + xx], count++;
+          }
+          v[k] = (float)sum / count;
         }
-        // The camera library's RGB888 is stored blue first.
+        const float cb = v[1] - 128, cr = v[2] - 128;
         uint8_t *o = out + (y * ow + x) * 3;
-        o[0] = sum[2] / count, o[1] = sum[1] / count, o[2] = sum[0] / count;
+        o[0] = clamp8(v[0] + 1.772f * cb), o[1] = clamp8(v[0] - 0.344136f * cb - 0.714136f * cr),
+        o[2] = clamp8(v[0] + 1.402f * cr);
       }
     }
+  }
+  stbi__cleanup_jpeg(j);
+  free(j);
+  return out;
+}
+
+// Shrunk, then encoded as a baseline JPEG, which the screen decodes in a few milliseconds
+// (Discogs' progressive originals take about a second).
+static bool make_cover(const Record &r) {
+  int len = 0, ow, oh;
+  uint8_t *src = r.cover.isEmpty() ? nullptr : download(r.cover, len);
+  if (!src) return false;
+  uint8_t *out = shrink(src, len, ow, oh);
+  free(src);
+  bool ok = false;
+  if (out) {
     uint8_t *jpeg = nullptr;
     size_t jpeg_len = 0;
     if (fmt2jpg(out, ow * oh * 3, ow, oh, PIXFORMAT_RGB888, 85, &jpeg, &jpeg_len)) {
@@ -132,7 +164,6 @@ static bool make_cover(const Record &r) {
     }
     free(out);
   }
-  stbi_image_free(rgb);
   return ok;
 }
 
@@ -152,6 +183,7 @@ static void run() {
   std::vector<Record> fresh, old;
   int code = vault_records(fresh);
   if (unlinked(code) || code != 200) {
+    vault_close();
     update([](SyncStatus &s) { s.running = false, s.failed = true; });
     return;
   }
@@ -163,11 +195,14 @@ static void run() {
   store_load_details(saved);
   for (size_t i = 0; i < fresh.size(); i++) {
     progress("prices", i, fresh.size());
-    Detail &d = details[fresh[i].id] = saved[fresh[i].id];  // the last known prices if this fetch fails
+    // The last known prices if this fetch fails. Moved, not copied: a copied 15-point history is
+    // under 64 bytes, so it would land in internal RAM, 76 bytes a record.
+    Detail &d = details[fresh[i].id] = std::move(saved[fresh[i].id]);
     code = vault_detail(fresh[i].id, d, true);
-    if (unlinked(code)) return;
+    if (unlinked(code)) return vault_close();
     vTaskDelay(1);
   }
+  vault_close();  // its TLS memory is needed for the covers' connection
   if (store_save_details(details)) update([](SyncStatus &s) { s.records_gen++; });
 
   // Covers that are missing or have changed, nearest the front of the wheel first.
@@ -194,11 +229,12 @@ static void run() {
     todo.erase(next);
     const uint32_t t = millis();
     const bool ok = make_cover(*r);
-    Serial.printf("{\"event\":\"cover_cached\",\"id\":%d,\"ok\":%s,\"ms\":%lu}\n", r->id, ok ? "true" : "false",
-                  millis() - t);
+    Serial.printf("{\"event\":\"cover_cached\",\"id\":%d,\"ok\":%s,\"ms\":%lu,\"internal_largest\":%u}\n", r->id,
+                  ok ? "true" : "false", millis() - t, heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     if (ok) update([](SyncStatus &s) { s.covers_gen++; });
     made++;
   }
+  if (cover_tls) cover_tls->stop();  // so the next sync's gateway connection has the memory
 
   const time_t now = time(nullptr);
   prefs.putULong64("last_ok", now);

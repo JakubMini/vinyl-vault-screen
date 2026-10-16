@@ -38,6 +38,7 @@ std::vector<String> wifi_scan();                            // nearby networks, 
 bool vault_linked();     // a device token is stored
 void vault_forget();     // drop the token, e.g. after a 401
 void vault_close();      // close the connection the sync's calls keep open
+void vault_warm(bool on);  // on: open it ahead of a call (~0.1 s on it, not ~2 s); off: close it
 
 int vault_start_link(LinkCode &code);
 LinkState vault_poll_link(const LinkCode &code);
@@ -45,4 +46,6 @@ LinkState vault_poll_link(const LinkCode &code);
 // from_sync: only the sync task passes true, to reuse its kept-open connection.
 int vault_records(std::vector<Record> &out);  // sync task only
 int vault_detail(int id, Detail &out, bool from_sync = false);
-int vault_set_grade(int id, const char *field, const char *grade);
+// Sync task only. On a 200, d takes the vault's value and grades, and the price it added to the
+// history if the new grade re-priced the record.
+int vault_set_grade(int id, const char *field, const char *grade, Detail &d);

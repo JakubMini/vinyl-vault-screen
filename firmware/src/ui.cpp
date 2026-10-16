@@ -1,7 +1,7 @@
 // The screens: a message (Wi-Fi, errors), Wi-Fi setup, the link screen (QR + code), the wheel of
 // covers and one record with its grades. Everything shown comes from the board's own copy of the
 // collection (store.h), kept fresh by the sync task, so nothing here waits for the network except
-// linking, joining Wi-Fi and saving a new grade.
+// linking and joining Wi-Fi. A new grade goes to the vault from the sync task.
 #include "ui.h"
 
 #include <Arduino.h>
@@ -290,34 +290,95 @@ static void paint_detail() {
   }
 }
 
-// A new grade goes to the vault straight away; a new record grade re-prices the record there.
+static void set_status(const char *text, lv_color_t color) {
+  lv_label_set_text(view.status, text);
+  lv_obj_set_style_text_color(view.status, color, 0);
+}
+
+// A new grade shows at once and goes to the vault from the sync task; a new record grade re-prices
+// the record there. If the vault says no, the old grade comes back. One save at a time.
+static struct {
+  int id = -1;  // the record being saved, or -1
+  bool media;
+  String was;   // its grade before the tap
+  uint32_t at;  // millis() at the tap
+} saving;
+
+static Record *record_by_id(int id) {
+  for (Record &r : records) if (r.id == id) return &r;
+  return nullptr;
+}
+
+static void grade_saved(lv_timer_t *t) {
+  int status;
+  Detail d;
+  if (!sync_grade_done(status, d)) return;
+  lv_timer_delete(t);
+  const int id = saving.id;
+  saving.id = -1;
+  Serial.printf("{\"event\":\"grade_saved\",\"id\":%d,\"status\":%d,\"ms\":%lu}\n", id, status, millis() - saving.at);
+  if (unlinked(status)) return;
+  Record *r = record_by_id(id);
+  // The record's page may have gone (or come back) while the vault answered.
+  const bool shown = view.status && records[view.index].id == id;
+  if (!r) return;
+  if (status != 200) {
+    (saving.media ? r->media : r->sleeve) = saving.was;
+    if (shown) set_status("Couldn't save. Tap the grade to try again.", DOWN), paint_detail();
+    return;
+  }
+  r->value = d.value;
+  r->media = d.media;
+  r->sleeve = d.sleeve;
+  details[id] = d;  // not on flash: writing it stalls the panel, and the next sync stores it
+  if (!shown) return;
+  view.detail = d;
+  set_status("Saved.", DIM);
+  paint_detail();
+}
+
+static void save_grade(Record &r, bool media, const char *grade) {
+  String &now = media ? r.media : r.sleeve;
+  saving = {r.id, media, now, millis()};
+  now = grade;
+  sync_set_grade(r.id, media ? "media_condition" : "sleeve_condition", grade, view.detail);
+  lv_timer_create(grade_saved, 50, nullptr);
+  set_status("Saving…", DIM);
+  paint_detail();
+}
+
 static void grade_tapped(lv_event_t *e) {
   const int code = (int)(intptr_t)lv_event_get_user_data(e);  // 0-7 record, 8-15 sleeve
   const bool media = code < GRADE_COUNT;
   const char *grade = GRADES[code % GRADE_COUNT];
   Record &r = records[view.index];
-  if ((media ? r.media : r.sleeve) == grade) return;
+  if (saving.id < 0 && (media ? r.media : r.sleeve) != grade) save_grade(r, media, grade);
+}
 
-  lv_label_set_text(view.status, "Saving…");
-  lv_obj_set_style_text_color(view.status, DIM, 0);
-  lv_refr_now(nullptr);
-  int status = vault_set_grade(r.id, media ? "media_condition" : "sleeve_condition", grade);
-  if (status == 200) status = vault_detail(r.id, view.detail);
-  if (unlinked(status)) return;
-  if (status != 200) {
-    lv_label_set_text(view.status, "Couldn't save. Tap the grade to try again.");
-    lv_obj_set_style_text_color(view.status, DOWN, 0);
+#ifdef GRADE_BENCH
+static void open_record(int index);
+// Benchmark build: opens a record and saves its sleeve grade as it is, so the vault keeps what it
+// had: as the page opens, on a warm connection, during a sync's prices and just after it. Look for
+// grade_saved.
+static void grade_bench(lv_timer_t *) {
+  static const float at[] = {0.5, 8, 23, 50};  // s after the page opens; a sync starts at 20 s
+  static uint32_t opened;
+  static size_t next;
+  if (!opened) {
+    if (records.empty() || sync_status().running || lv_screen_active() != idle_screen) return;
+    for (size_t i = 0; i < records.size() && !opened; i++) {
+      for (int g = 0; g < GRADE_COUNT && !opened; g++) if (records[i].sleeve == GRADES[g]) open_record(i), opened = millis();
+    }
     return;
   }
-  r.value = view.detail.value;
-  r.media = view.detail.media;
-  r.sleeve = view.detail.sleeve;
-  details[r.id] = view.detail;
-  store_save_records(records);
-  store_save_details(details);
-  lv_label_set_text(view.status, "Saved.");
-  paint_detail();
+  lv_display_trigger_activity(nullptr);  // stay on the page, not the clock
+  if (next == 2 && millis() - opened > 20000 && !sync_status().running) sync_now();
+  if (next >= sizeof at / sizeof *at || millis() - opened < at[next] * 1000 || saving.id >= 0) return;
+  Record &r = records[view.index];
+  for (int g = 0; g < GRADE_COUNT; g++) if (r.sleeve == GRADES[g]) save_grade(r, false, GRADES[g]);
+  Serial.printf("{\"event\":\"grade_bench\",\"step\":%u}\n", next++);
 }
+#endif
 
 static void chip_row(lv_obj_t *parent, int y, int height, int code_base, lv_obj_t **chips, bool with_price) {
   for (int g = 0; g < GRADE_COUNT; g++) {
@@ -422,6 +483,10 @@ static void open_record(int index) {
   view.status = label(s, &font_mono_14, DIM, 448);
   lv_label_set_text(view.status, "");
   lv_obj_set_pos(view.status, 16, 462);
+  lv_obj_add_event_cb(view.status, [](lv_event_t *e) {
+    if (lv_event_get_target_obj(e) == view.status) view.status = nullptr, sync_keep_warm(false);
+  }, LV_EVENT_DELETE, nullptr);
+  sync_keep_warm(true);  // the page's first grade then saves in about 0.1 s, not a handshake's 2 s
 
   paint_detail();
   show(s);
@@ -1064,6 +1129,9 @@ void ui_begin() {
       open_clock();
     }
   }, 1000, nullptr);
+#ifdef GRADE_BENCH
+  lv_timer_create(grade_bench, 100, nullptr);
+#endif
   String ssid;
   if (!wifi_saved(ssid)) return open_wifi();
   message(("Joining " + ssid + "…").c_str());

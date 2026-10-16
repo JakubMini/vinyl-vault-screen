@@ -53,4 +53,6 @@ board and a small Worker.
 - Don't touch flash while the wheel is on screen. Don't let a loop on core 0 run for seconds
   without yielding: the task watchdog resets the board.
 - Measure before and after a performance change: a `-DWHEEL_BENCH` build spins the wheel by
-  itself for 12 s and logs `{"event":"profile",...}` every second.
+  itself for 12 s and logs `{"event":"profile",...}` every second. A `-DGRADE_BENCH` build opens a
+  record and saves its sleeve grade as it already is, four times (one during a sync), and logs
+  `{"event":"grade_saved",...,"ms":...}` from tap to answer.

@@ -129,6 +129,14 @@ static int call(const char *method, const String &path, const String &body, Json
   return status;
 }
 
+void vault_warm(bool on) {
+  const bool open = (kept_tls && kept_tls->connected()) || kept_plain.connected();
+  if (open && !on) vault_close();
+  if (open || !on) return;
+  JsonDocument doc;
+  call("GET", "/", "", doc, nullptr, true);  // the gateway answers 404 itself; the vault never sees it
+}
+
 int vault_start_link(LinkCode &code) {
   JsonDocument doc;
   int status = call("POST", "/api/device/code", "", doc);
@@ -201,10 +209,21 @@ int vault_detail(int id, Detail &out, bool from_sync) {
   return status;
 }
 
-int vault_set_grade(int id, const char *field, const char *grade) {
-  JsonDocument body, doc;
+int vault_set_grade(int id, const char *field, const char *grade, Detail &d) {
+  JsonDocument body, filter, doc;
   body[field] = grade;
   String json;
   serializeJson(body, json);
-  return call("PATCH", "/api/records/" + String(id), json, doc);
+  for (const char *key : {"current_value", "media_condition", "sleeve_condition"}) filter[key] = true;
+  const int status = call("PATCH", "/api/records/" + String(id), json, doc, &filter, true);
+  if (status != 200) return status;
+  const bool regraded = d.media != doc["media_condition"].as<String>();
+  d.value = doc["current_value"] | "";
+  d.media = doc["media_condition"].as<String>();
+  d.sleeve = doc["sleeve_condition"].as<String>();
+  // The vault re-prices from its suggestion for the new grade, and only when it has one.
+  for (int g = 0; g < GRADE_COUNT; g++) {
+    if (regraded && d.media == GRADES[g] && d.price_by_grade[g] != NO_VALUE) d.history.push_back(d.price_by_grade[g]);
+  }
+  return status;
 }

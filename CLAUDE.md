@@ -40,6 +40,8 @@ board and a small Worker.
   - `src/sync.cpp`: the background task that keeps the board's copy fresh, and makes covers.
   - `src/store.cpp`: the copy on LittleFS. Write only what changed: flash writes stall the panel.
   - `src/covers.cpp`: cover JPEGs held in PSRAM, decoded on a background task.
+  - `src/nfc.cpp`: the PN532 on the relay header (I2C on IO40/IO2, reset on IO1), polled on core 0.
+    Without the reset it stays stuck after the ESP32 restarts mid-transfer, holding SCL low.
   - `src/ui.cpp`: the screens. The wheel draws itself straight into the panel; LVGL does the rest.
   - `include/wheel.h`: the wheel's geometry, pure and tested on the laptop (`test/test_wheel`).
   - `include/config.h`: the gateway URL. Nothing secret lives in the firmware.

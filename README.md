@@ -19,7 +19,7 @@ The price at every grade is right there on the buttons.
 > [!NOTE]
 > **Working on my desk since 16 October 2026**, against the vault running on my laptop. The
 > vault's side of the login is in [vinyl-value-vault#40](https://github.com/JakubMini/vinyl-value-vault/pull/40)
-> and the gateway isn't deployed yet. NFC tags in the sleeves are the next step, not built.
+> and the gateway isn't deployed yet. A PN532 reader is wired up and sees tags; nothing uses them yet.
 
 ## What it does
 
@@ -109,7 +109,7 @@ touches flash while you browse.
 | --- | --- |
 | Board | Guition **ESP32-4848S040**: ESP32-S3 (16 MB flash, 8 MB PSRAM), 4" 480×480 IPS (ST7701S), GT911 touch |
 | Power | USB-C |
-| Later | PN532 NFC reader and NTAG215 stickers in the sleeves (not built yet) |
+| NFC | PN532 on the relay header: I²C on IO40 (SDA) and IO2 (SCL), its reset on IO1. It reports tags; NTAG215 stickers in the sleeves are next |
 
 The pins and panel set-up are in [`firmware/src/board.cpp`](firmware/src/board.cpp).
 

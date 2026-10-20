@@ -2,6 +2,7 @@
 
 #include "board.h"
 #include "covers.h"
+#include "nfc.h"
 #include "store.h"
 #include "sync.h"
 #include "ui.h"
@@ -16,6 +17,7 @@ void setup() {
   store_begin();
   sync_begin();
   covers_begin();
+  nfc_begin();
   Serial.printf("{\"event\":\"memory\",\"internal_free\":%u,\"internal_largest\":%u}\n",
                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL), heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   ui_begin();

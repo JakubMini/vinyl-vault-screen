@@ -3,10 +3,8 @@
 #include <Adafruit_PN532.h>
 
 static volatile bool connected = false;
-static volatile uint32_t tag_ms = 0;
 
 bool nfc_connected() { return connected; }
-uint32_t nfc_tag_ms() { return tag_ms; }
 
 static void task(void *) {
   // UART, not I2C: over I2C the PN532 refuses every poll while it's busy, and each refusal cost the
@@ -35,7 +33,7 @@ static void task(void *) {
     while (Serial1.available()) Serial1.read();
     uint8_t uid[7], len;
     if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &len, 100)) {
-      tag_ms = millis(), quiet = 0;
+      quiet = 0;
       if (!present) {
         char hex[15] = "";
         for (int i = 0; i < len && i < 7; i++) sprintf(hex + 2 * i, "%02X", uid[i]);

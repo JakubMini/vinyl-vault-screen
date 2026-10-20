@@ -8,6 +8,7 @@
 
 #include "board.h"
 #include "covers.h"
+#include "nfc.h"
 #include "store.h"
 #include "sync.h"
 #include "vault.h"
@@ -1129,6 +1130,20 @@ void ui_begin() {
       open_clock();
     }
   }, 1000, nullptr);
+  // "NFC Not Found" in red at the very top of every screen, once the reader has been gone for 5 s,
+  // so a boot or a reconnect doesn't flash it. Nothing shows while it works.
+  lv_obj_t *nfc = label(lv_layer_top(), &font_mono_14, lv_palette_main(LV_PALETTE_RED), 200);
+  lv_label_set_text_static(nfc, "");  // not LVGL's "Text": the screen draws while Wi-Fi joins, before the timer runs
+  lv_obj_align(nfc, LV_ALIGN_TOP_MID, 0, 4);
+  lv_obj_set_style_text_align(nfc, LV_TEXT_ALIGN_CENTER, 0);
+  lv_timer_create([](lv_timer_t *t) {
+    lv_obj_t *l = (lv_obj_t *)lv_timer_get_user_data(t);
+    const uint32_t now = millis();
+    static uint32_t up_ms = now;  // when the reader was last connected
+    if (nfc_connected()) up_ms = now;
+    const char *text = now - up_ms > 5000 ? "NFC Not Found" : "";
+    if (text != lv_label_get_text(l)) lv_label_set_text_static(l, text);  // redraw only on a change
+  }, 250, nfc);
 #ifdef GRADE_BENCH
   lv_timer_create(grade_bench, 100, nullptr);
 #endif

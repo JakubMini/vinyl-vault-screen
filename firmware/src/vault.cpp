@@ -22,6 +22,13 @@ static void open_prefs() {
   static bool opened = false;
   if (!opened) opened = prefs.begin("vault");
   token = prefs.getString("token");
+#ifdef WIFI2_SSID
+  // A one-off build seeds the fallback network; normal builds keep whatever NVS holds.
+  if (prefs.getString("ssid2") != WIFI2_SSID || prefs.getString("pass2") != WIFI2_PASS) {
+    prefs.putString("ssid2", WIFI2_SSID);
+    prefs.putString("pass2", WIFI2_PASS);
+  }
+#endif
 }
 
 bool wifi_saved(String &ssid) {
@@ -70,9 +77,17 @@ bool wifi_connect(const String &ssid, const String &pass) {
   return true;
 }
 
+// Tries the remembered network, then the fallback. Whichever joins is tried first next time.
 bool wifi_reconnect() {
   String ssid;
-  return wifi_saved(ssid) && wifi_connect(ssid, prefs.getString("pass"));
+  if (!wifi_saved(ssid)) return false;
+  const String pass = prefs.getString("pass");
+  if (wifi_connect(ssid, pass)) return true;
+  const String ssid2 = prefs.getString("ssid2"), pass2 = prefs.getString("pass2");
+  if (ssid2.isEmpty() || ssid2 == ssid || !wifi_connect(ssid2, pass2)) return false;
+  prefs.putString("ssid2", ssid);  // wifi_connect made the fallback the primary; keep the old one
+  prefs.putString("pass2", pass);
+  return true;
 }
 
 bool vault_linked() { return !token.isEmpty(); }

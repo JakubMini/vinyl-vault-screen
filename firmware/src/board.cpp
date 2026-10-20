@@ -17,8 +17,9 @@ static Arduino_ESP32RGBPanel *panel = new Arduino_ESP32RGBPanel(
     1, 10, 8, 20,          // vsync polarity, front porch, pulse width, back porch
     0, 12000000, false, 0, 0,
     // Bounce buffers copy the PSRAM framebuffer through internal RAM, so the picture holds still
-    // while Wi-Fi and the cover decoder are busy with PSRAM.
-    BOARD_W * 10);
+    // while Wi-Fi and the cover decoder are busy with PSRAM. 20 rows, not 10: on a busy network
+    // Wi-Fi interrupts on core 0 delayed the refill and the panel showed stale lines.
+    BOARD_W * 20);
 static Arduino_RGB_Display *gfx = new Arduino_RGB_Display(
     BOARD_W, BOARD_H, panel, 0, true, bus, GFX_NOT_DEFINED, st7701_type9_init_operations,
     sizeof(st7701_type9_init_operations));

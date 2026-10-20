@@ -1,7 +1,6 @@
 #include "nfc.h"
 
 #include <Adafruit_PN532.h>
-#include <Wire.h>
 
 static volatile bool connected = false;
 static volatile uint32_t tag_ms = 0;
@@ -10,19 +9,17 @@ bool nfc_connected() { return connected; }
 uint32_t nfc_tag_ms() { return tag_ms; }
 
 static void task(void *) {
-  // Wire1, so the touch controller keeps Wire to itself. The I2C driver turns on the ESP32's own
-  // pull-ups too; 50 kHz, since the PN532 is slow and the wires are long.
-  Wire1.setPins(40 /* SDA */, 2 /* SCL */);
-  Adafruit_PN532 nfc(0xFF, 1 /* RSTPDN */, &Wire1);  // no IRQ wire: it logs "Invalid IO 255" once
-  nfc.begin();
-  Wire1.setClock(50000);
+  // UART, not I2C: over I2C the PN532 refuses every poll while it's busy, and each refusal cost the
+  // ESP32 about 80 ms, so a tag check took seconds. Serial1, with its pins set before the library
+  // starts it: left to itself it would take UART1's default pins, which drive the panel.
+  Serial1.begin(115200, SERIAL_8N1, 40 /* RX, the PN532's TXD */, 2 /* TX, its RXD */);
+  Serial1.setTimeout(50);  // a read with no tag answers short: don't wait the default second for the rest
+  Adafruit_PN532 nfc(1 /* RSTPDN */, &Serial1);
   bool present = false;
   int quiet = 0;
   for (;;) {
     if (!connected) {
-      // A reset first: if the ESP32 restarted mid-transfer, the PN532 holds SCL low until it gets one.
-      nfc.reset();
-      delay(10);
+      nfc.begin();  // reset through RSTPDN, then the wake-up preamble
       const uint32_t version = nfc.getFirmwareVersion();
       // One try per poll, so a read comes back at once when no tag is there.
       if (version && nfc.SAMConfig() && nfc.setPassiveActivationRetries(1)) {
@@ -34,6 +31,8 @@ static void task(void *) {
         continue;
       }
     }
+    // The library reads fixed lengths; whatever a longer answer left behind would spoil the next ACK.
+    while (Serial1.available()) Serial1.read();
     uint8_t uid[7], len;
     if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &len, 100)) {
       tag_ms = millis(), quiet = 0;

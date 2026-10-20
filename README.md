@@ -109,7 +109,7 @@ touches flash while you browse.
 | --- | --- |
 | Board | Guition **ESP32-4848S040**: ESP32-S3 (16 MB flash, 8 MB PSRAM), 4" 480×480 IPS (ST7701S), GT911 touch |
 | Power | USB-C |
-| NFC | PN532 on the relay header: I²C on IO40 (SDA) and IO2 (SCL), its reset on IO1. It reports tags; NTAG215 stickers in the sleeves are next |
+| NFC | PN532 on the relay header, set to UART: its TXD on IO40, RXD on IO2, reset on IO1. It reports tags; NTAG215 stickers in the sleeves are next |
 
 The pins and panel set-up are in [`firmware/src/board.cpp`](firmware/src/board.cpp).
 

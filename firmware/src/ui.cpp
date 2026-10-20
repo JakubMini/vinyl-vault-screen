@@ -1133,6 +1133,7 @@ void ui_begin() {
   // "NFC Not Found" in red at the very top of every screen, once the reader has been gone for 5 s,
   // so a boot or a reconnect doesn't flash it. Nothing shows while it works.
   lv_obj_t *nfc = label(lv_layer_top(), &font_mono_14, lv_palette_main(LV_PALETTE_RED), 200);
+  lv_label_set_text_static(nfc, "");  // not LVGL's "Text": the screen draws while Wi-Fi joins, before the timer runs
   lv_obj_align(nfc, LV_ALIGN_TOP_MID, 0, 4);
   lv_obj_set_style_text_align(nfc, LV_TEXT_ALIGN_CENTER, 0);
   lv_timer_create([](lv_timer_t *t) {

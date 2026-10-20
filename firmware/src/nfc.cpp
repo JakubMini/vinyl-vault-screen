@@ -13,19 +13,24 @@ static void task(void *) {
   Serial1.begin(115200, SERIAL_8N1, 40 /* RX, the PN532's TXD */, 2 /* TX, its RXD */);
   Serial1.setTimeout(50);  // a read with no tag answers short: don't wait the default second for the rest
   Adafruit_PN532 nfc(1 /* RSTPDN */, &Serial1);
+  digitalWrite(1, HIGH);  // out of reset: the library only drives RSTPDN in begin(), which this skips
   bool present = false;
   int quiet = 0;
   for (;;) {
     if (!connected) {
-      nfc.begin();  // reset through RSTPDN, then the wake-up preamble
-      const uint32_t version = nfc.getFirmwareVersion();
+      // It is asleep at boot. A long preamble wakes it, but only with a command straight after, and
+      // the first try usually fails anyway: hence the quick retry. Connects within a second.
+      static const uint8_t wake[16] = {0x55, 0x55};  // then zeros
+      while (Serial1.available()) Serial1.read();
+      Serial1.write(wake, sizeof wake);
+      uint32_t version = 0;
       // One try per poll, so a read comes back at once when no tag is there.
-      if (version && nfc.SAMConfig() && nfc.setPassiveActivationRetries(1)) {
+      if (nfc.SAMConfig() && (version = nfc.getFirmwareVersion()) && nfc.setPassiveActivationRetries(1)) {
         connected = true;
         Serial.printf("{\"event\":\"nfc\",\"connected\":true,\"firmware\":\"%lu.%lu\"}\n", (version >> 16) & 0xFF,
                       (version >> 8) & 0xFF);
       } else {
-        delay(2000);
+        delay(200);
         continue;
       }
     }

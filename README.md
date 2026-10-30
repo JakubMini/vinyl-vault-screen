@@ -19,8 +19,8 @@ The price at every grade is right there on the buttons.
 > [!NOTE]
 > **Working on my desk since 16 October 2026**, against the vault running on my laptop. The
 > vault's side of the login is in [vinyl-value-vault#40](https://github.com/JakubMini/vinyl-value-vault/pull/40)
-> and the gateway isn't deployed yet. Moved to a Waveshare board on 30 October 2026; the PN532 reader
-> is being rewired to its H3 header.
+> and the gateway isn't deployed yet. Moved to a Waveshare board on 30 October 2026. A PN532 reader
+> sees tags; nothing uses them yet.
 
 ## What it does
 
@@ -110,7 +110,7 @@ touches flash while you browse.
 | --- | --- |
 | Board | Waveshare **ESP32-S3-Touch-LCD-4B**: ESP32-S3 (16 MB flash, 8 MB PSRAM), 4" 480×480 IPS (ST7701), GT911 touch. The panel's set-up lines and resets go through a TCA9554 IO expander |
 | Power | USB-C |
-| NFC | PN532 on the H3 header, set to UART: its VCC on pin 4 (3.3 V), GND on 20, TXD on 5 (GPIO43), RXD on 13 (IO0). The code reports tags; not yet checked on this board |
+| NFC | PN532 on the H3 header, set to UART: its VCC on pin 4 (3.3 V), GND on 20, TXD on 5 (GPIO43), RXD on 13 (IO0). It reports tags; NTAG215 stickers in the sleeves are next |
 
 The pins and panel set-up are in [`firmware/src/board.cpp`](firmware/src/board.cpp).
 

@@ -10,7 +10,10 @@ static void task(void *) {
   // UART, not I2C: over I2C the PN532 refuses every poll while it's busy, and each refusal cost the
   // ESP32 about 80 ms, so a tag check took seconds. Serial1, with its pins set before the library
   // starts it: left to itself it would take UART1's default pins, which drive the panel.
-  Serial1.begin(115200, SERIAL_8N1, 0 /* RX, the PN532's TXD */, 43 /* TX, its RXD */);
+  // RX on GPIO43, not IO0: on IO0 (pull-ups, the BOOT key) the first byte of every ACK was lost, and
+  // the PN532 holding it low at reset would boot the ESP32 into download mode.
+  pinMode(43, INPUT);  // GPIO43 boots as UART0's TX and keeps driving the line unless released first
+  Serial1.begin(115200, SERIAL_8N1, 43 /* RX, the PN532's TXD */, 0 /* TX, its RXD */);
   Serial1.setTimeout(50);  // a read with no tag answers short: don't wait the default second for the rest
   // No reset pin (255; the library logs it as invalid once): the module pulls RSTPDN high, and the
   // library only pulses it in begin(), which this skips.

@@ -40,9 +40,9 @@ board and a small Worker.
   - `src/sync.cpp`: the background task that keeps the board's copy fresh, and makes covers.
   - `src/store.cpp`: the copy on LittleFS. Write only what changed: flash writes stall the panel.
   - `src/covers.cpp`: cover JPEGs held in PSRAM, decoded on a background task.
-  - `src/nfc.cpp`: the PN532, polled on core 0. Not started on the current board: it was on UART
-    (IO40/IO2, reset IO1) on the old ESP32-4848S040, and those pins drive this board's panel.
-    Not I2C: there it refused every poll while busy, a check took seconds, and an ESP32 restart
+  - `src/nfc.cpp`: the PN532 on the H3 header, UART (ESP32 RX on IO0, TX on GPIO43), polled on
+    core 0. Not SPI: H3 has only two GPIOs free (RX0 is driven by the USB-UART chip, IO19/20 are
+    the USB port). Not I2C: there it refused every poll while busy, a check took seconds, and an ESP32 restart
     mid-transfer left it holding SCL low until it lost power.
   - `src/ui.cpp`: the screens. The wheel draws itself straight into the panel; LVGL does the rest.
   - `include/wheel.h`: the wheel's geometry, pure and tested on the laptop (`test/test_wheel`).

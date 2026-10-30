@@ -10,10 +10,11 @@ static void task(void *) {
   // UART, not I2C: over I2C the PN532 refuses every poll while it's busy, and each refusal cost the
   // ESP32 about 80 ms, so a tag check took seconds. Serial1, with its pins set before the library
   // starts it: left to itself it would take UART1's default pins, which drive the panel.
-  Serial1.begin(115200, SERIAL_8N1, 40 /* RX, the PN532's TXD */, 2 /* TX, its RXD */);
+  Serial1.begin(115200, SERIAL_8N1, 0 /* RX, the PN532's TXD */, 43 /* TX, its RXD */);
   Serial1.setTimeout(50);  // a read with no tag answers short: don't wait the default second for the rest
-  Adafruit_PN532 nfc(1 /* RSTPDN */, &Serial1);
-  digitalWrite(1, HIGH);  // out of reset: the library only drives RSTPDN in begin(), which this skips
+  // No reset pin (255; the library logs it as invalid once): the module pulls RSTPDN high, and the
+  // library only pulses it in begin(), which this skips.
+  Adafruit_PN532 nfc(255, &Serial1);
   bool present = false;
   int quiet = 0;
   for (;;) {

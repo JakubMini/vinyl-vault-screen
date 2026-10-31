@@ -40,7 +40,8 @@ board and a small Worker.
   - `src/sync.cpp`: the background task that keeps the board's copy fresh, and makes covers.
   - `src/store.cpp`: the copy on LittleFS. Write only what changed: flash writes stall the panel.
   - `src/covers.cpp`: cover JPEGs held in PSRAM, decoded on a background task.
-  - `src/nfc.cpp`: the PN532 on the relay header (UART on IO40/IO2, reset on IO1), polled on core 0.
+  - `src/nfc.cpp`: the PN532, polled on core 0. Not started on the current board: it was on UART
+    (IO40/IO2, reset IO1) on the old ESP32-4848S040, and those pins drive this board's panel.
     Not I2C: there it refused every poll while busy, a check took seconds, and an ESP32 restart
     mid-transfer left it holding SCL low until it lost power.
   - `src/ui.cpp`: the screens. The wheel draws itself straight into the panel; LVGL does the rest.
@@ -50,7 +51,8 @@ board and a small Worker.
 
 ## On the board
 
-- The board is an ESP32-4848S040 on a CH340 serial port (`/dev/cu.usbserial-*`).
+- The board is a Waveshare ESP32-S3-Touch-LCD-4B on the chip's own USB port (`/dev/cu.usbmodem*`).
+  Its panel SPI, LCD reset and touch reset are on a TCA9554 expander (I2C 0x20, SDA 47, SCL 48).
 - Flash and watch: `pio run -e screen -t upload -t monitor`.
 - Never block the UI core on the network. Sync and covers run on core 0; core 1 is LVGL's.
 - Don't touch flash while the wheel is on screen. Don't let a loop on core 0 run for seconds

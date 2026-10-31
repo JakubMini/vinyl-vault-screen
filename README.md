@@ -19,7 +19,8 @@ The price at every grade is right there on the buttons.
 > [!NOTE]
 > **Working on my desk since 16 October 2026**, against the vault running on my laptop. The
 > vault's side of the login is in [vinyl-value-vault#40](https://github.com/JakubMini/vinyl-value-vault/pull/40)
-> and the gateway isn't deployed yet. A PN532 reader is wired up and sees tags; nothing uses them yet.
+> and the gateway isn't deployed yet. Moved to a Waveshare board on 30 October 2026; the PN532 NFC
+> reader isn't wired to it yet, so the screen says "NFC Not Found".
 
 ## What it does
 
@@ -107,9 +108,9 @@ touches flash while you browse.
 
 | Part | |
 | --- | --- |
-| Board | Guition **ESP32-4848S040**: ESP32-S3 (16 MB flash, 8 MB PSRAM), 4" 480×480 IPS (ST7701S), GT911 touch |
+| Board | Waveshare **ESP32-S3-Touch-LCD-4B**: ESP32-S3 (16 MB flash, 8 MB PSRAM), 4" 480×480 IPS (ST7701), GT911 touch. The panel's set-up lines and resets go through a TCA9554 IO expander |
 | Power | USB-C |
-| NFC | PN532 on the relay header, set to UART: its TXD on IO40, RXD on IO2, reset on IO1. It reports tags; NTAG215 stickers in the sleeves are next |
+| NFC | PN532, not connected yet: its old pins (IO40, IO2, IO1) drive this board's panel. The code in `nfc.cpp` reports tags over UART; I2C or SPI is next |
 
 The pins and panel set-up are in [`firmware/src/board.cpp`](firmware/src/board.cpp).
 
@@ -173,5 +174,5 @@ before-and-after profile. The details are in [CLAUDE.md](CLAUDE.md).
 - [ ] Deploy the gateway and merge the vault's device login
 - [ ] NFC: tap a sleeve on the stand to open its record and log a play
 - [ ] A printed stand. The [v3 STLs](https://claude.ai/share/23891de9-6aae-48fc-b43c-f0128d91087c)
-      were modelled on the Waveshare 86 box, and need re-measuring for this board
+      were modelled on a Waveshare 86 box; check they fit this one
 - [ ] Backlight off when idle; encrypted NVS for the Wi-Fi password

@@ -1,5 +1,5 @@
 // The screens: a message (Wi-Fi, errors), Wi-Fi setup, the link screen (QR + code), the wheel of
-// covers and one record with its grades. Everything shown comes from the board's own copy of the
+// covers, one record with its grades, and assigning an NFC tag to a record. Everything shown comes from the board's own copy of the
 // collection (store.h), kept fresh by the sync task, so nothing here waits for the network except
 // linking and joining Wi-Fi. A new grade goes to the vault from the sync task.
 #include "ui.h"
@@ -43,6 +43,17 @@ static void open_wifi();
 static void open_link();
 static void open_wheel();
 static void open_clock();
+static void open_record(int index, const char *note = nullptr);
+static void assign_tag(int index);
+
+// The NFC tag being looked up or assigned.
+static struct {
+  String uid;
+  bool looking;  // waiting for the vault to say which record it opens
+  uint32_t asked_at;
+  bool offline;  // the vault couldn't be asked
+  int suggest;   // the record that was on screen when it was tapped, or -1
+} tag;
 
 // The crate and a record's page give way to the clock when left alone; a tap on it calls `back`.
 // Cleared when that screen goes, so a new screen at the same address is never mistaken for it.
@@ -96,6 +107,19 @@ static lv_obj_t *button(lv_obj_t *parent, const char *text, int32_t w, int32_t h
   return b;
 }
 
+// A filled pill, for the one thing a screen is for.
+static lv_obj_t *primary(lv_obj_t *parent, const char *text, int32_t w, int32_t h) {
+  lv_obj_t *b = button(parent, text, w, h);
+  lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(b, ACCENT, 0);
+  lv_obj_set_style_bg_color(b, EYEBROW, LV_STATE_PRESSED);
+  lv_obj_set_style_border_width(b, 0, 0);
+  lv_obj_t *t = lv_obj_get_child(b, 0);
+  lv_obj_set_style_text_font(t, &font_22, 0);
+  lv_obj_set_style_text_color(t, BG, 0);
+  return b;
+}
+
 // The green line above a heading, as on the site.
 static lv_obj_t *eyebrow(lv_obj_t *parent, const char *text) {
   lv_obj_t *l = label(parent, &font_16, EYEBROW, 300);
@@ -125,7 +149,11 @@ static lv_obj_t *readout(lv_obj_t *parent, int32_t y, bool right, const char *te
 
 // One screen at a time. The old one is deleted later, never inside its own event handler: a tap
 // on the wheel opens a record while that tap is still being delivered to the wheel.
-static void show(lv_obj_t *s) {
+// tags: an NFC tag may take the screen from here (the crate, a record, the clock, the tag screens),
+// not from Wi-Fi setup, linking or the first load.
+static bool tags_here;
+static void show(lv_obj_t *s, bool tags = false) {
+  tags_here = tags;
   lv_obj_t *old = lv_screen_active();
   lv_screen_load(s);
   if (old && old != s) lv_obj_delete_async(old);
@@ -357,7 +385,6 @@ static void grade_tapped(lv_event_t *e) {
 }
 
 #ifdef GRADE_BENCH
-static void open_record(int index);
 // Benchmark build: opens a record and saves its sleeve grade as it is, so the vault keeps what it
 // had: as the page opens, on a warm connection, during a sync's prices and just after it. Look for
 // grade_saved.
@@ -404,7 +431,8 @@ static void chip_row(lv_obj_t *parent, int y, int height, int code_base, lv_obj_
   }
 }
 
-static void open_record(int index) {
+// note: a line for the foot of the page as it opens, e.g. that a tag was just assigned.
+static void open_record(int index, const char *note) {
   Record &r = records[index];
   view.index = index;
   // From the board's copy; only a record the first sync hasn't reached yet asks the vault.
@@ -481,8 +509,8 @@ static void open_record(int index) {
   lv_label_set_text(sleeve, "Sleeve grade");
   lv_obj_set_pos(sleeve, 16, 390);
   chip_row(s, 412, 46, GRADE_COUNT, view.sleeve, false);
-  view.status = label(s, &font_mono_14, DIM, 448);
-  lv_label_set_text(view.status, "");
+  view.status = label(s, &font_mono_14, note ? ACCENT : DIM, 448);
+  lv_label_set_text(view.status, note ? note : "");
   lv_obj_set_pos(view.status, 16, 462);
   lv_obj_add_event_cb(view.status, [](lv_event_t *e) {
     if (lv_event_get_target_obj(e) == view.status) view.status = nullptr, sync_keep_warm(false);
@@ -490,7 +518,7 @@ static void open_record(int index) {
   sync_keep_warm(true);  // the page's first grade then saves in about 0.1 s, not a handshake's 2 s
 
   paint_detail();
-  show(s);
+  show(s, true);
 }
 
 // ---- wheel -------------------------------------------------------------------------------------
@@ -522,8 +550,15 @@ static struct {
   uint16_t *strip;
   Span drawn[BAND_BOTTOM - BAND_TOP];  // per band row, the columns covers took last frame
   lv_obj_t *artist, *title, *value, *grade, *change, *track, *needle, *sync, *count, *fps;
+  lv_obj_t *screen;  // while the crate is up
   lv_timer_t *timer;
   String sync_text;
+  bool picker;  // choosing a record for a new NFC tag
+  // Spinning to a tagged record by itself: pos goes from spin_from to spin_to, eased, from
+  // spin_start for spin_ms; then, after a beat, its page opens.
+  bool spinning;
+  float spin_from, spin_to;
+  uint32_t spin_start, spin_ms;
 } wheel;
 
 static void want_covers_around(int front) {
@@ -678,7 +713,8 @@ static void update_front() {
   lv_obj_set_x(wheel.needle, x - 4);
   lv_label_set_text(wheel.count, count_text(front).c_str());
   wheel.status_ms = 0;
-  want_covers_around(front);
+  // While spinning to a record, its covers are the ones to decode, not those flying past.
+  want_covers_around(wheel.spinning ? wheel_index(lroundf(wheel.spin_to), n) : front);
 }
 
 // A cover that was loading has arrived for one of the drawn slots.
@@ -713,6 +749,16 @@ static void tick(lv_timer_t *) {
   if (now < bench_until) wheel.pos += 4 * dt, wheel.target = NAN;
   else if (isnan(wheel.target)) wheel.target = roundf(wheel.pos);
 #endif
+  if (wheel.spinning) {
+    const float t = fminf(1.0f, (now - wheel.spin_start) / (float)wheel.spin_ms);
+    const float eased = t < 0.5f ? 4 * t * t * t : 1 - powf(2 - 2 * t, 3) / 2;  // slow, fast, slow
+    wheel.pos = wheel.spin_from + (wheel.spin_to - wheel.spin_from) * eased;
+    if (now - wheel.spin_start > wheel.spin_ms + 300) {  // landed, and a beat to see it
+      wheel.spinning = false;
+      wheel.target = wheel.spin_to;
+      return open_record(wheel_index(lroundf(wheel.spin_to), records.size()));
+    }
+  }
   if (!isnan(wheel.target) && wheel.pos != wheel.target) {
     const float gap = wheel.target - wheel.pos;
     wheel.pos = fabsf(gap) < 0.002f ? wheel.target : wheel.pos + gap * fminf(1.0f, dt * 7.0f);
@@ -733,7 +779,7 @@ static void tick(lv_timer_t *) {
     render();
   }
 
-  if (now - wheel.status_ms > 1000) {
+  if (now - wheel.status_ms > 1000 && !wheel.picker) {
     wheel.status_ms = now;
     const String text = status_text();
     if (text != wheel.sync_text) lv_label_set_text(wheel.sync, (wheel.sync_text = text).c_str());
@@ -762,6 +808,7 @@ static void touched(lv_event_t *e) {
   lv_indev_t *indev = lv_indev_active();
   const lv_event_code_t code = lv_event_get_code(e);
   if (code == LV_EVENT_PRESSED) {
+    wheel.spinning = false;  // a finger stops a spin to a tagged record
     wheel.target = NAN;
     wheel.velocity = 0;
     wheel.moved = 0;
@@ -786,16 +833,24 @@ static void touched(lv_event_t *e) {
       wheel.target = base + 1;
     } else if (in_band && fabsf(wheel.pos - base) < 0.05f) {
       wheel.target = base;
-      open_record(wheel.front);
+      if (wheel.picker) assign_tag(wheel.front);
+      else open_record(wheel.front);
     } else {
       wheel.target = base;
     }
   }
 }
 
-static void open_wheel() {
-  lv_obj_t *s = screen();
-  idle_here(s, open_wheel);
+// picker: choosing the record for a new NFC tag. "Assign tag" above, × in place of Refresh, and an
+// Assign button in place of the price.
+static void build_wheel(bool picker) {
+  lv_obj_t *s = wheel.screen = screen();
+  lv_obj_add_event_cb(s, [](lv_event_t *e) {
+    if (lv_event_get_target_obj(e) == wheel.screen) wheel.screen = nullptr;
+  }, LV_EVENT_DELETE, nullptr);
+  wheel.picker = picker;
+  wheel.spinning = false;
+  if (!picker) idle_here(s, open_wheel);
   wheel.front = -1;
   wheel.sync_text = "";
   // LVGL paints the whole new screen, band included, on its next refresh: draw over it after.
@@ -804,14 +859,18 @@ static void open_wheel() {
   if (isnan(wheel.target)) wheel.target = roundf(wheel.pos);
   for (auto &shown : wheel.shown) shown = nullptr;
 
-  eyebrow(s, "The crate");
-  lv_obj_t *refresh = button(s, LV_SYMBOL_REFRESH, 40, 40);
-  lv_obj_set_style_text_font(lv_obj_get_child(refresh, 0), &lv_font_montserrat_20, 0);
-  lv_obj_align(refresh, LV_ALIGN_TOP_RIGHT, -16, 8);
-  lv_obj_add_event_cb(refresh, [](lv_event_t *) {
-    sync_now();
-    wheel.status_ms = 0;
-  }, LV_EVENT_CLICKED, nullptr);
+  eyebrow(s, picker ? "Assign tag" : "The crate");
+  lv_obj_t *corner = button(s, picker ? LV_SYMBOL_CLOSE : LV_SYMBOL_REFRESH, 40, 40);
+  lv_obj_set_style_text_font(lv_obj_get_child(corner, 0), &lv_font_montserrat_20, 0);
+  lv_obj_align(corner, LV_ALIGN_TOP_RIGHT, -16, 8);
+  if (picker) {
+    lv_obj_add_event_cb(corner, [](lv_event_t *) { resume(); }, LV_EVENT_CLICKED, nullptr);
+  } else {
+    lv_obj_add_event_cb(corner, [](lv_event_t *) {
+      sync_now();
+      wheel.status_ms = 0;
+    }, LV_EVENT_CLICKED, nullptr);
+  }
 
   // Below the band, from y 300: nothing here may reach into the rows the wheel draws.
   wheel.artist = label(s, &font_30, TEXT, 448);
@@ -835,12 +894,19 @@ static void open_wheel() {
   lv_obj_set_style_pad_ver(wheel.grade, 3, 0);
   wheel.change = label(s, &font_16, DIM, 448);
   lv_obj_set_pos(wheel.change, 16, 404);
+  if (picker) {
+    lv_obj_set_hidden(row, true);
+    lv_obj_set_hidden(wheel.change, true);
+    lv_obj_t *assign = primary(s, "Assign tag to this record", 448, 52);
+    lv_obj_set_pos(assign, 16, 374);
+    lv_obj_add_event_cb(assign, [](lv_event_t *) { assign_tag(wheel.front); }, LV_EVENT_CLICKED, nullptr);
+  }
 
   rule(s, 440, RULE);
   wheel.track = rule(s, 439, ACCENT);
   lv_obj_set_height(wheel.track, 3);
   wheel.needle = dot(s, 16, 440, 9, ACCENT);
-  wheel.sync = readout(s, 452, false, "");
+  wheel.sync = readout(s, 452, false, picker ? ("tag " + tag.uid).c_str() : "");
   wheel.count = readout(s, 452, true, "");
 #ifdef WHEEL_BENCH
   wheel.fps = label(s, &font_mono_14, DIM, 200);  // the frame-rate readout, for tuning
@@ -856,8 +922,10 @@ static void open_wheel() {
   wheel.timer = lv_timer_create(tick, 16, nullptr);
   lv_obj_add_event_cb(s, [](lv_event_t *) { lv_timer_delete(wheel.timer); }, LV_EVENT_DELETE, nullptr);
   update_front();
-  show(s);
+  show(s, true);
 }
+
+static void open_wheel() { build_wheel(false); }
 
 // ---- clock -------------------------------------------------------------------------------------
 //
@@ -940,7 +1008,168 @@ static void open_clock() {
   lv_timer_t *timer = lv_timer_create(dial_tick, 1000, nullptr);
   lv_obj_add_event_cb(s, [](lv_event_t *e) { lv_timer_delete((lv_timer_t *)lv_event_get_user_data(e)); },
                       LV_EVENT_DELETE, timer);
-  show(s);
+  show(s, true);
+}
+
+// ---- NFC tags ----------------------------------------------------------------------------------
+//
+// A sleeve's tag opens its record: the crate spins round to it, then its page opens. A tag the
+// board doesn't know is looked up in the vault; one the vault doesn't know either is assigned here,
+// to the record on screen or one chosen on the crate. A record may have several tags.
+
+// A line at the very top of every screen for a few seconds, under "NFC Not Found" if that is up.
+static const char *note_text = "";
+static lv_color_t note_color;
+static uint32_t note_until;
+static void note(const char *text, lv_color_t color, uint32_t ms) {
+  note_text = text, note_color = color, note_until = millis() + ms;
+}
+
+// Spin the crate the short way round to records[index], then open it. False if the record has
+// left the collection.
+static bool go_to(int id) {
+  const int n = records.size();
+  int index = -1;
+  for (int i = 0; i < n; i++) if (records[i].id == id) index = i;
+  if (index < 0) return false;
+  if (lv_screen_active() == idle_screen && idle_screen != wheel.screen && view.index == index) return true;  // open already
+  if (lv_screen_active() != wheel.screen || wheel.picker) open_wheel();
+  const float from = wheel.pos;
+  int steps = wheel_index(index - (int)lroundf(from), n);
+  if (steps > n / 2) steps -= n;
+  wheel.spin_from = from;
+  wheel.spin_to = lroundf(from) + steps;
+  wheel.spin_start = millis();
+  wheel.spin_ms = constrain(600 + 25 * abs(steps), 600, 1800);
+  wheel.spinning = true;
+  wheel.target = NAN;
+  want_covers_around(index);
+  return true;
+}
+
+static void assign_tag(int index) {
+  const int count = sync_tag_assign(tag.uid.c_str(), records[index].id);
+  Serial.printf("{\"event\":\"tag_assigned\",\"uid\":\"%s\",\"record\":%d,\"tags\":%d}\n", tag.uid.c_str(),
+                records[index].id, count);
+  String line = count > 1 ? "Tag assigned · " + String(count) + " tags open this record" : String("Tag assigned");
+  if (tag.offline) line += " · the vault gets it later";
+  open_record(index, line.c_str());
+}
+
+static void open_picker() { build_wheel(true); }
+
+// "Which record is this tag for?", offering the record that was on screen.
+static lv_obj_t *prompt;  // while it is up
+static void open_tag_prompt() {
+  lv_obj_t *s = prompt = screen();
+  lv_obj_add_event_cb(s, [](lv_event_t *e) {
+    if (lv_event_get_target_obj(e) == prompt) prompt = nullptr;
+  }, LV_EVENT_DELETE, nullptr);
+  eyebrow(s, "New tag");
+  lv_obj_t *close = button(s, LV_SYMBOL_CLOSE, 40, 40);
+  lv_obj_set_style_text_font(lv_obj_get_child(close, 0), &lv_font_montserrat_20, 0);
+  lv_obj_align(close, LV_ALIGN_TOP_RIGHT, -16, 8);
+  lv_obj_add_event_cb(close, [](lv_event_t *) { resume(); }, LV_EVENT_CLICKED, nullptr);
+
+  lv_obj_t *head = label(s, &font_30, TEXT, 448);
+  lv_label_set_text(head, "Which record is this tag for?");
+  lv_obj_set_pos(head, 16, 52);
+  String spaced;  // 04 C6 7B …
+  for (size_t i = 0; i < tag.uid.length(); i += 2) spaced += (i ? " " : "") + tag.uid.substring(i, i + 2);
+  readout(s, 98, false, spaced.c_str());
+
+  const int i = tag.suggest;
+  if (i >= 0) {
+    const Record &r = records[i];
+    lv_obj_t *card = lv_obj_create(s);
+    lv_obj_set_size(card, 448, 150);
+    lv_obj_set_pos(card, 16, 132);
+    lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(card, RULE_SOFT, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_radius(card, 14, 0);
+    lv_obj_set_scrollable(card, false);
+    lv_obj_remove_flag(card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *cover = lv_image_create(s);
+    const lv_image_dsc_t *img = cover_of(r);
+    lv_image_set_src(cover, img);
+    lv_image_set_scale(cover, 120 * 256 / img->header.w);
+    lv_obj_set_size(cover, 120, 120);
+    lv_image_set_inner_align(cover, LV_IMAGE_ALIGN_CENTER);
+    lv_obj_set_pos(cover, 32, 147);
+    lv_obj_t *on = label(s, &font_16, EYEBROW, 290);
+    lv_label_set_text(on, "On screen now");
+    lv_obj_set_pos(on, 168, 158);
+    lv_obj_t *artist = label(s, &font_22, TEXT, 280);
+    lv_label_set_text(artist, r.artist.c_str());
+    lv_obj_set_pos(artist, 168, 184);
+    lv_obj_t *title = label(s, &font_16, DIM, 280);
+    lv_label_set_text(title, (r.title + (r.year ? " · " + String(r.year) : "")).c_str());
+    lv_obj_set_pos(title, 168, 216);
+  }
+  lv_obj_t *go = primary(s, i >= 0 ? "Assign to this record" : "Choose a record", 448, 56);
+  lv_obj_set_pos(go, 16, 300);
+  lv_obj_add_event_cb(go, [](lv_event_t *) {
+    if (tag.suggest >= 0) assign_tag(tag.suggest);
+    else open_picker();
+  }, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *later = button(s, "Not now", i >= 0 ? 216 : 448, 52);
+  lv_obj_set_pos(later, i >= 0 ? 248 : 16, 372);
+  lv_obj_add_event_cb(later, [](lv_event_t *) { resume(); }, LV_EVENT_CLICKED, nullptr);
+  if (i >= 0) {
+    lv_obj_t *other = button(s, "Choose another", 216, 52);
+    lv_obj_set_pos(other, 16, 372);
+    lv_obj_add_event_cb(other, [](lv_event_t *) { open_picker(); }, LV_EVENT_CLICKED, nullptr);
+  }
+  rule(s, 440, RULE);
+  readout(s, 452, false, "tap a known tag to open its record");
+  show(s, true);
+}
+
+// The vault has answered for a tag the board didn't know.
+static void tag_answered(int status, int id) {
+  tag.looking = false;
+  note("", DIM, 0);
+  if (!tags_here || unlinked(status)) return;
+  Serial.printf("{\"event\":\"tag\",\"uid\":\"%s\",\"from\":\"vault\",\"status\":%d,\"record\":%d}\n",
+                tag.uid.c_str(), status, id);
+  if (status == 200 && go_to(id)) return;
+  tag.offline = status != 200 && status != 404;
+  if (tag.offline) note("Vault offline · tags are sent when it's back", DOWN, 6000);
+  open_tag_prompt();
+}
+
+// Every 100 ms: a tag that counted (nfc.h), or the vault's answer about one.
+static void tag_tick(lv_timer_t *) {
+  int status, id;
+  if (tag.looking) {
+    if (sync_tag_found(status, id)) tag_answered(status, id);
+    else if (millis() - tag.asked_at > 20000) tag_answered(-1, -1);  // the sync task is stuck: as if offline
+    return;  // the next tag waits in nfc.h until this one is answered
+  }
+  char uid[21];
+  if (!nfc_take(uid)) return;
+  if (!tags_here) {
+    Serial.printf("{\"event\":\"tag\",\"uid\":\"%s\",\"ignored\":true}\n", uid);
+    return;
+  }
+  lv_display_trigger_activity(nullptr);  // a tap of a tag is a touch: no clock straight after
+  // The record on screen, for the prompt: the crate's front cover, or the open page.
+  const lv_obj_t *on = lv_screen_active();
+  if (on == idle_screen) tag.suggest = on == wheel.screen ? wheel.front : view.index;
+  else if (on != wheel.screen && on != prompt) tag.suggest = -1;  // the clock; on the prompt or picker it stays
+  tag.uid = uid;
+  tag.offline = false;
+  id = sync_tag_record(uid);
+  Serial.printf("{\"event\":\"tag\",\"uid\":\"%s\",\"from\":\"board\",\"record\":%d}\n", uid, id);
+  if (id >= 0) {
+    if (!go_to(id)) open_tag_prompt();  // its record has left the collection: assign it again
+    return;
+  }
+  tag.looking = true;
+  tag.asked_at = millis();
+  note("Checking tag…", DIM, 20000);
+  sync_tag_lookup(uid);
 }
 
 // ---- linking -----------------------------------------------------------------------------------
@@ -1132,18 +1361,24 @@ void ui_begin() {
   }, 1000, nullptr);
   // "NFC Not Found" in red at the very top of every screen, once the reader has been gone for 5 s,
   // so a boot or a reconnect doesn't flash it. Nothing shows while it works.
-  lv_obj_t *nfc = label(lv_layer_top(), &font_mono_14, lv_palette_main(LV_PALETTE_RED), 200);
+  lv_obj_t *nfc = label(lv_layer_top(), &font_mono_14, lv_palette_main(LV_PALETTE_RED), 448);
   lv_label_set_text_static(nfc, "");  // not LVGL's "Text": the screen draws while Wi-Fi joins, before the timer runs
   lv_obj_align(nfc, LV_ALIGN_TOP_MID, 0, 4);
   lv_obj_set_style_text_align(nfc, LV_TEXT_ALIGN_CENTER, 0);
+  // The same line carries a tag's notes ("Checking tag…") for a few seconds.
   lv_timer_create([](lv_timer_t *t) {
     lv_obj_t *l = (lv_obj_t *)lv_timer_get_user_data(t);
     const uint32_t now = millis();
     static uint32_t up_ms = now;  // when the reader was last connected
     if (nfc_connected()) up_ms = now;
-    const char *text = now - up_ms > 5000 ? "NFC Not Found" : "";
-    if (text != lv_label_get_text(l)) lv_label_set_text_static(l, text);  // redraw only on a change
-  }, 250, nfc);
+    const bool missing = now - up_ms > 5000;
+    const char *text = missing ? "NFC Not Found" : (int32_t)(note_until - now) > 0 ? note_text : "";
+    if (text != lv_label_get_text(l)) {  // redraw only on a change
+      lv_label_set_text_static(l, text);
+      lv_obj_set_style_text_color(l, missing ? lv_palette_main(LV_PALETTE_RED) : note_color, 0);
+    }
+  }, 100, nfc);
+  lv_timer_create(tag_tick, 100, nullptr);
 #ifdef GRADE_BENCH
   lv_timer_create(grade_bench, 100, nullptr);
 #endif

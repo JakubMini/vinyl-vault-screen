@@ -25,6 +25,8 @@ describe("gateway", () => {
     ["GET", "/api/records?limit=1000"],
     ["GET", "/api/records/42?limit=90"],
     ["PATCH", "/api/records/42"],
+    ["GET", "/api/tags/04C67BA5892681"],
+    ["PUT", "/api/tags/04C67BA5892681"],
   ])("forwards %s %s", async (method, path) => {
     const { response, seen } = call(method, path);
     expect((await response).status).toBe(200);
@@ -40,6 +42,8 @@ describe("gateway", () => {
     ["POST", "/api/devices/approve"],
     ["GET", "/api/devices"],
     ["GET", "/api/records/42/../../sync/runs"],
+    ["DELETE", "/api/tags/04C67BA5892681"],
+    ["GET", "/api/tags/../devices"],
     ["GET", "/"],
   ])("refuses %s %s", async (method, path) => {
     const { response, seen } = call(method, path);

@@ -211,6 +211,105 @@ static bool grade_asked() {
   return asked;
 }
 
+// ---- NFC tags --------------------------------------------------------------------------------
+
+static SemaphoreHandle_t tags_lock;  // not `lock`: saving tags touches flash, and sync_status() mustn't wait
+static std::map<String, Tag> tags;
+static struct {
+  bool asked, done;
+  String uid;
+  int status, id;
+} looking;
+
+int sync_tag_record(const char *uid) {
+  xSemaphoreTake(tags_lock, portMAX_DELAY);
+  auto t = tags.find(uid);
+  const int id = t == tags.end() ? -1 : t->second.id;
+  xSemaphoreGive(tags_lock);
+  return id;
+}
+
+void sync_tag_lookup(const char *uid) {
+  xSemaphoreTake(tags_lock, portMAX_DELAY);
+  looking.asked = true, looking.done = false, looking.uid = uid;
+  xSemaphoreGive(tags_lock);
+  xTaskNotifyGive(sync_task);
+}
+
+bool sync_tag_found(int &status, int &id) {
+  xSemaphoreTake(tags_lock, portMAX_DELAY);
+  const bool done = looking.done;
+  if (done) status = looking.status, id = looking.id, looking.done = false;
+  xSemaphoreGive(tags_lock);
+  return done;
+}
+
+int sync_tag_assign(const char *uid, int id) {
+  xSemaphoreTake(tags_lock, portMAX_DELAY);
+  tags[uid] = {id, false};
+  store_save_tags(tags);
+  int count = 0;
+  for (const auto &[u, t] : tags) count += t.id == id;
+  xSemaphoreGive(tags_lock);
+  xTaskNotifyGive(sync_task);
+  return count;
+}
+
+static bool tag_asked() {
+  xSemaphoreTake(tags_lock, portMAX_DELAY);
+  const bool asked = looking.asked;
+  xSemaphoreGive(tags_lock);
+  return asked;
+}
+
+// The screen is waiting on the vault: a sync stops fetching to let it go first.
+static bool screen_waiting() { return grade_asked() || tag_asked(); }
+
+// The lookup the screen asked for, then any tag the vault doesn't have yet. On the gateway
+// connection, like a grade; both calls are safe to send twice.
+static void serve_tags() {
+  xSemaphoreTake(tags_lock, portMAX_DELAY);
+  const bool asked = looking.asked;
+  looking.asked = false;
+  const String uid = looking.uid;
+  std::vector<std::pair<String, int>> unsent;
+  for (const auto &[u, t] : tags) if (!t.sent) unsent.push_back({u, t.id});
+  xSemaphoreGive(tags_lock);
+  const bool online = WiFi.isConnected() && vault_linked();
+
+  if (asked) {
+    int id = -1, code = -1;
+    if (online && (code = vault_tag(uid, id)) < 0) vault_close(), code = vault_tag(uid, id);
+    unlinked(code);
+    xSemaphoreTake(tags_lock, portMAX_DELAY);
+    if (code == 200 && id > 0) tags[uid] = {id, true}, store_save_tags(tags);
+    looking.done = true, looking.status = code, looking.id = id;
+    xSemaphoreGive(tags_lock);
+  }
+
+  static uint32_t failed_at;  // after a failure, try again in a minute
+  if (unsent.empty() || !online || (failed_at && millis() - failed_at < 60000)) return;
+  failed_at = 0;
+  std::vector<String> sent;
+  for (const auto &[u, id] : unsent) {
+    int code = vault_set_tag(u, id);
+    if (code < 0) vault_close(), code = vault_set_tag(u, id);
+    if (unlinked(code)) break;
+    if (code != 200 && code != 404) {  // 404: the record left the vault, so there's nothing to send
+      failed_at = millis() | 1;
+      break;
+    }
+    sent.push_back(u);
+  }
+  xSemaphoreTake(tags_lock, portMAX_DELAY);
+  for (const String &u : sent) {
+    auto t = tags.find(u);
+    if (t != tags.end()) t->second.sent = true;  // assigned again since? then still unsent, as it should be
+  }
+  if (!sent.empty()) store_save_tags(tags);
+  xSemaphoreGive(tags_lock);
+}
+
 // While the sync waits, or after its prices: on the gateway connection, warm if the page kept it so.
 // Never mid-prices: with the sync's data in internal RAM, the next price call then loses the connection.
 // Returns the record's id if the vault took the grade, with its detail in `out`; otherwise -1.
@@ -259,7 +358,7 @@ static void run() {
     // The last known prices if this fetch fails. Moved, not copied: a copied 15-point history is
     // under 64 bytes, so it would land in internal RAM, 76 bytes a record.
     Detail &d = details[fresh[i].id] = std::move(saved[fresh[i].id]);
-    if (grade_asked()) continue;  // a new grade goes first; the rest keep their last known prices
+    if (screen_waiting()) continue;  // a grade or a tag goes first; the rest keep their last known prices
     code = vault_detail(fresh[i].id, d, true);
     if (unlinked(code)) return vault_close();
     vTaskDelay(1);
@@ -272,6 +371,7 @@ static void run() {
     for (Record &r : fresh) if (r.id == graded_id) r.value = graded.value, r.media = graded.media, r.sleeve = graded.sleeve;
     if (store_save_records(fresh)) update([](SyncStatus &s) { s.records_gen++; });
   }
+  serve_tags();
   if (store_save_details(details)) update([](SyncStatus &s) { s.records_gen++; });
 
   // Covers that are missing or have changed, nearest the front of the wheel first.
@@ -286,7 +386,7 @@ static void run() {
   // Kept open for the next grade unless covers need its TLS memory.
   if (!todo.empty()) vault_close();
   int made = 0;
-  while (!todo.empty() && !grade_asked()) {  // a new grade goes first; the rest come next sync
+  while (!todo.empty() && !screen_waiting()) {  // a grade or a tag goes first; the rest come next sync
     progress("covers", made, made + todo.size());
     const int n = fresh.size();
     int at = 0;
@@ -329,9 +429,10 @@ static void task(void *) {
   long hour_seen = -1;
   time_t retry_at = 0;
   for (;;) {
-    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));  // or sooner, for a grade
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));  // or sooner, for a grade or a tag
     Detail unused;
     serve_grade(unused);
+    serve_tags();
     keep_warm();
     const time_t now = time(nullptr);
     if (now < 1700000000) continue;  // no clock yet
@@ -348,6 +449,8 @@ static void task(void *) {
 
 void sync_begin() {
   lock = xSemaphoreCreateMutex();
+  tags_lock = xSemaphoreCreateMutex();
+  store_load_tags(tags);
   prefs.begin("sync");
   status.last_ok = prefs.getULong64("last_ok", 0);
   // Core 0, away from LVGL on core 1: decoding a Discogs cover takes about a second. At idle

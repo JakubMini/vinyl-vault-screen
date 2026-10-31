@@ -13,6 +13,13 @@ bool store_load_records(std::vector<Record> &out);
 bool store_save_records(const std::vector<Record> &records);   // true when the file changed
 bool store_load_details(std::map<int, Detail> &out);
 bool store_save_details(const std::map<int, Detail> &details);  // true when the file changed
+// NFC tags, by UID in hex: the record each opens, and whether the vault has it yet.
+struct Tag {
+  int id;
+  bool sent;
+};
+bool store_load_tags(std::map<String, Tag> &out);
+bool store_save_tags(const std::map<String, Tag> &tags);  // true when the file changed
 String store_cover_path(int id);    // a baseline JPEG, 240 px, made by the sync task
 std::set<int> store_cover_ids();    // ids with a cover on flash; one directory walk
 // Write a file whole: readers see the old one or the new one, never half of it.

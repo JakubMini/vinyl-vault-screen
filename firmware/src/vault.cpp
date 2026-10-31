@@ -242,3 +242,18 @@ int vault_set_grade(int id, const char *field, const char *grade, Detail &d) {
   }
   return status;
 }
+
+int vault_tag(const String &uid, int &id) {
+  JsonDocument doc;
+  const int status = call("GET", "/api/tags/" + uid, "", doc, nullptr, true);
+  if (status == 200) id = doc["record_id"] | -1;
+  return status;
+}
+
+int vault_set_tag(const String &uid, int id) {
+  JsonDocument body, doc;
+  body["record_id"] = id;
+  String json;
+  serializeJson(body, json);
+  return call("PUT", "/api/tags/" + uid, json, doc, nullptr, true);
+}

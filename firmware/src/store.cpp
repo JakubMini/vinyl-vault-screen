@@ -103,6 +103,24 @@ bool store_load_details(std::map<int, Detail> &out) {
   return true;
 }
 
+bool store_save_tags(const std::map<String, Tag> &tags) {
+  JsonDocument doc;
+  for (const auto &[uid, t] : tags) {
+    JsonObject o = doc[uid].to<JsonObject>();
+    o["id"] = t.id;
+    o["sent"] = t.sent;
+  }
+  return write_json("/tags.json", doc);
+}
+
+bool store_load_tags(std::map<String, Tag> &out) {
+  JsonDocument doc;
+  if (!read_json("/tags.json", doc)) return false;
+  out.clear();
+  for (JsonPair kv : doc.as<JsonObject>()) out[kv.key().c_str()] = {kv.value()["id"] | -1, kv.value()["sent"] | false};
+  return true;
+}
+
 String store_cover_path(int id) { return "/c/" + String(id) + ".jpg"; }
 
 std::set<int> store_cover_ids() {

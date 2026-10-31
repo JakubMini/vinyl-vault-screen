@@ -27,7 +27,8 @@ The price at every grade is right there on the buttons.
 - **Logs in like a TV app.** The screen shows a QR code and a code. Scan it, log in to the vault
   on your phone, tap Approve. No password or key is ever typed into, or flashed onto, the board.
 - **Joins Wi-Fi from the screen.** It scans, you pick a network and type the password on an
-  on-screen keyboard. It remembers it, so a restart reconnects on its own.
+  on-screen keyboard. It remembers it, so a restart reconnects on its own. It can also keep a
+  fallback network, tried when the first one fails.
 - **Browses on a wheel.** Covers ride the rim of a big wheel: the one in front is largest, the
   ones before and after shrink and fade round the rim. Drag it, fling it, tap a side cover to
   step to it. It wraps round, so the last record sits before the first.
@@ -155,6 +156,15 @@ To use a gateway on your laptop instead of the deployed one:
 ```bash
 PLATFORMIO_BUILD_FLAGS='-DGATEWAY_URL=\"http://192.168.0.159:8787\"' pio run -e screen -t upload
 ```
+
+To store a fallback network in the board's NVS (once; normal builds keep it, and the password
+never goes into the repo):
+
+```bash
+PLATFORMIO_BUILD_FLAGS="'-DWIFI2_SSID=\"name\"' '-DWIFI2_PASS=\"password\"'" pio run -e screen -t upload
+```
+
+Then flash a normal build, so the password is not left in the app image.
 
 On first boot: pick Wi-Fi, scan the QR code, approve on your phone. The first sync takes about
 five minutes, mostly making the covers. After that it starts in a few seconds.

@@ -31,7 +31,7 @@ enum class LinkState { Pending, Linked, Expired, Error };
 
 // Wi-Fi, chosen on the screen and remembered across resets.
 bool wifi_saved(String &ssid);                              // a network is remembered
-bool wifi_reconnect();                                      // join the remembered network
+bool wifi_reconnect();                                      // join the remembered network, else the fallback
 bool wifi_connect(const String &ssid, const String &pass);  // join, set the clock, remember; false after 20 s
 std::vector<String> wifi_scan();                            // nearby networks, strongest first
 

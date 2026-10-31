@@ -32,7 +32,7 @@ board and a small Worker.
 
 ## Where things live
 
-- `gateway/src/index.ts`: the public Worker. An allowlist of five routes, forwarded to the vault
+- `gateway/src/index.ts`: the public Worker. An allowlist of seven routes, forwarded to the vault
   over a service binding, passing only `vvd_` device tokens. Tests in `gateway/test/`.
 - `firmware/` (PlatformIO, Arduino core 3, LVGL 9):
   - `src/board.cpp`: panel, touch, LVGL glue. Pins and the ST7701 init live here only.
@@ -41,7 +41,9 @@ board and a small Worker.
   - `src/store.cpp`: the copy on LittleFS. Write only what changed: flash writes stall the panel.
   - `src/covers.cpp`: cover JPEGs held in PSRAM, decoded on a background task.
   - `src/nfc.cpp`: the PN532 on the H3 header, UART (ESP32 RX on GPIO43, TX on IO0), polled on
-    core 0. Not SPI: H3 has only two GPIOs free (RX0 is driven by the USB-UART chip, IO19/20 are
+    core 0. Each read goes through `include/tag_gate.h` (once per tag until another tag or 30 s
+    away; tested in `test/test_tag_gate`). The tag-to-record copy lives in `sync.cpp`, which asks
+    the vault about tags the board doesn't know and sends new ones. Not SPI: H3 has only two GPIOs free (RX0 is driven by the USB-UART chip, IO19/20 are
     the USB port). Not I2C: there it refused every poll while busy, a check took seconds, and an ESP32 restart
     mid-transfer left it holding SCL low until it lost power.
   - `src/ui.cpp`: the screens. The wheel draws itself straight into the panel; LVGL does the rest.

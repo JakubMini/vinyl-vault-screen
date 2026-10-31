@@ -49,3 +49,6 @@ int vault_detail(int id, Detail &out, bool from_sync = false);
 // Sync task only. On a 200, d takes the vault's value and grades, and the price it added to the
 // history if the new grade re-priced the record.
 int vault_set_grade(int id, const char *field, const char *grade, Detail &d);
+// Sync task only. The record an NFC tag opens (a 404 for a tag nobody has assigned), and assigning one.
+int vault_tag(const String &uid, int &id);
+int vault_set_tag(const String &uid, int id);

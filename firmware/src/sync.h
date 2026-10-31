@@ -16,6 +16,13 @@ void sync_set_grade(int id, const char *field, const char *grade, const Detail &
 bool sync_grade_done(int &status, Detail &out);  // true once, when the vault has answered
 void sync_keep_warm(bool on);  // while a record's page is up: its grades save on an open connection
 
+// NFC tags: the board's copy of which record each opens, filled in from the vault as tags turn up.
+int sync_tag_record(const char *uid);       // the record from the board's copy, or -1 if it has none
+void sync_tag_lookup(const char *uid);      // ask the vault, from the sync task
+bool sync_tag_found(int &status, int &id);  // true once, when the vault has answered: 200 with id, or 404
+int sync_tag_assign(const char *uid, int id);  // kept on the board now, sent to the vault by the sync
+                                               // task; returns how many tags open that record
+
 struct SyncStatus {
   bool running;
   int done, total;              // progress through the current step

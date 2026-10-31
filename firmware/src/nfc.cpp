@@ -2,9 +2,13 @@
 
 #include <Adafruit_PN532.h>
 
+#include "tag_gate.h"
+
 static volatile bool connected = false;
+static QueueHandle_t counted;  // one UID, the latest, waiting for the UI
 
 bool nfc_connected() { return connected; }
+bool nfc_take(char uid[21]) { return xQueueReceive(counted, uid, 0) == pdTRUE; }
 
 static void task(void *) {
   // UART, not I2C: over I2C the PN532 refuses every poll while it's busy, and each refusal cost the
@@ -18,6 +22,7 @@ static void task(void *) {
   // No reset pin (255; the library logs it as invalid once): the module pulls RSTPDN high, and the
   // library only pulses it in begin(), which this skips.
   Adafruit_PN532 nfc(255, &Serial1);
+  TagGate gate;
   bool present = false;
   int quiet = 0;
   for (;;) {
@@ -40,13 +45,15 @@ static void task(void *) {
     }
     // The library reads fixed lengths; whatever a longer answer left behind would spoil the next ACK.
     while (Serial1.available()) Serial1.read();
-    uint8_t uid[7], len;
+    uint8_t uid[10], len;  // 4, 7 or 10 bytes
     if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &len, 100)) {
       quiet = 0;
-      if (!present) {
-        char hex[15] = "";
-        for (int i = 0; i < len && i < 7; i++) sprintf(hex + 2 * i, "%02X", uid[i]);
-        Serial.printf("{\"event\":\"nfc_tag\",\"uid\":\"%s\"}\n", hex);
+      char hex[21] = "";
+      for (int i = 0; i < len && i < 10; i++) sprintf(hex + 2 * i, "%02X", uid[i]);
+      const bool counts = gate.read(hex, millis());
+      if (counts) xQueueOverwrite(counted, hex);
+      if (!present || counts) {
+        Serial.printf("{\"event\":\"nfc_tag\",\"uid\":\"%s\",\"counted\":%s}\n", hex, counts ? "true" : "false");
       }
       present = true;
     } else {
@@ -61,4 +68,7 @@ static void task(void *) {
   }
 }
 
-void nfc_begin() { xTaskCreatePinnedToCore(task, "nfc", 4096, nullptr, 1, nullptr, 0); }
+void nfc_begin() {
+  counted = xQueueCreate(1, 21);
+  xTaskCreatePinnedToCore(task, "nfc", 4096, nullptr, 1, nullptr, 0);
+}

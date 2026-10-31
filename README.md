@@ -19,8 +19,8 @@ The price at every grade is right there on the buttons.
 > [!NOTE]
 > **Working on my desk since 16 October 2026**, against the vault running on my laptop. The
 > vault's side of the login is in [vinyl-value-vault#40](https://github.com/JakubMini/vinyl-value-vault/pull/40)
-> and the gateway isn't deployed yet. Moved to a Waveshare board on 30 October 2026. A PN532 reader
-> sees tags; nothing uses them yet.
+> and the gateway isn't deployed yet. Moved to a Waveshare board on 30 October 2026. NFC tags in
+> the sleeves open their records (built 31 October 2026, not yet tried on the board).
 
 ## What it does
 
@@ -38,6 +38,11 @@ The price at every grade is right there on the buttons.
   re-priced there at its new grade.
 - **Works offline.** Everything it shows is a copy kept on the board, refreshed once an hour (on
   the hour) or when you tap Refresh. Browsing never waits for the network.
+- **Opens a record from its sleeve.** An NFC sticker in the sleeve, tapped on the reader, spins
+  the crate round to that record and opens its page, from any screen. A new sticker asks which
+  record it belongs to: the one on screen, or one you pick on the crate. A record can have
+  several. The links live in the vault, with a copy on the board, so a new screen knows them too.
+  A tag counts once, and again only after another tag or 30 seconds away from the reader.
 - **Becomes a clock when left alone.** After two minutes without a touch, the crate or record
   page turns into an analog clock drawn on the record, with UK time and the date under it. A tap
   goes back to the same record.
@@ -46,7 +51,7 @@ The price at every grade is right there on the buttons.
 
 ```mermaid
 flowchart LR
-  screen(["Screen<br/>ESP32-S3"]) -->|HTTPS, device token| gateway["Gateway Worker<br/>(public, 5 routes)"]
+  screen(["Screen<br/>ESP32-S3"]) -->|HTTPS, device token| gateway["Gateway Worker<br/>(public, 7 routes)"]
   gateway -->|service binding| vault["Vinyl Value Vault<br/>(behind Cloudflare Access)"]
   phone(["Phone"]) -->|Access login, Approve| vault
   screen -->|cover images| discogs[("Discogs image CDN")]
@@ -55,10 +60,11 @@ flowchart LR
 **Why a gateway.** Cloudflare Access protects the vault on every hostname and path, so a
 microcontroller can't reach it. The [Alexa skill](https://github.com/JakubMini/vinyl-vault-alexa)
 already solves this with a service binding: one Worker calling another inside Cloudflare. The
-gateway does the same, but it forwards only five routes (`POST /api/device/code` and `/token`,
-`GET /api/records`, `GET /api/records/:id`, `PATCH /api/records/:id`). It passes on only screen
-tokens, so the vault's API key can't be used to get round Access. The vault checks every
-token itself, and a screen's token can read records and change grades, nothing more.
+gateway does the same, but it forwards only seven routes (`POST /api/device/code` and `/token`,
+`GET /api/records`, `GET /api/records/:id`, `PATCH /api/records/:id`, and `GET` and `PUT
+/api/tags/:uid`). It passes on only screen tokens, so the vault's API key can't be used to get
+round Access. The vault checks every token itself, and a screen's token can read records, change
+grades and look up or assign NFC tags, nothing more.
 
 **The login** follows the shape of OAuth's device flow (RFC 8628):
 
@@ -111,7 +117,7 @@ touches flash while you browse.
 | --- | --- |
 | Board | Waveshare **ESP32-S3-Touch-LCD-4B**: ESP32-S3 (16 MB flash, 8 MB PSRAM), 4" 480×480 IPS (ST7701), GT911 touch. The panel's set-up lines and resets go through a TCA9554 IO expander |
 | Power | USB-C |
-| NFC | PN532 on the H3 header, set to UART: its VCC on pin 4 (3.3 V), GND on 20, TXD on 5 (GPIO43), RXD on 13 (IO0). It reports tags; NTAG215 stickers in the sleeves are next |
+| NFC | PN532 on the H3 header, set to UART: its VCC on pin 4 (3.3 V), GND on 20, TXD on 5 (GPIO43), RXD on 13 (IO0). Any ISO 14443A sticker works; only its UID is read |
 
 The pins and panel set-up are in [`firmware/src/board.cpp`](firmware/src/board.cpp).
 
@@ -182,7 +188,8 @@ before-and-after profile. The details are in [CLAUDE.md](CLAUDE.md).
 - [x] The board's own copy of the collection, refreshed hourly
 - [x] A record clock when idle
 - [ ] Deploy the gateway and merge the vault's device login
-- [ ] NFC: tap a sleeve on the stand to open its record and log a play
+- [x] NFC: tap a sleeve to open its record, and assign new stickers from the screen
+- [ ] Log a play when a sleeve goes on the stand
 - [ ] A printed stand. The [v3 STLs](https://claude.ai/share/23891de9-6aae-48fc-b43c-f0128d91087c)
       were modelled on a Waveshare 86 box; check they fit this one
 - [ ] Backlight off when idle; encrypted NVS for the Wi-Fi password

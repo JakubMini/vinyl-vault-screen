@@ -75,6 +75,10 @@ void board_begin() {
   expander->digitalWrite(5, HIGH);
   delay(60);
   expander->pinMode(6, INPUT);
+  // EXIO3 is also the speaker amp's enable, unused here. High lets the PN532 run: its RSTPDN pull-up
+  // loses to the amp's 10K pull-down until the expander drives the pin.
+  expander->pinMode(3, OUTPUT);
+  board_nfc_reset(false);
   if (touch.init(BUS_SDA, BUS_SCL) != CT_SUCCESS) Serial.println(R"({"event":"touch_failed"})");
 
   lv_init();
@@ -101,3 +105,5 @@ void board_draw(int x, int y, int w, int h, const uint16_t *px) {
   for (int r = 0; r < h; r++) memcpy(fb + r * BOARD_W, px + r * w, w * 2);
   Cache_WriteBack_Addr((uint32_t)fb, ((h - 1) * BOARD_W + w) * 2);
 }
+
+void board_nfc_reset(bool held) { expander->digitalWrite(3, held ? LOW : HIGH); }

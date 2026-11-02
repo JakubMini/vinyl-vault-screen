@@ -119,7 +119,7 @@ touches flash while you browse.
 | --- | --- |
 | Board | Waveshare **ESP32-S3-Touch-LCD-4B**: ESP32-S3 (16 MB flash, 8 MB PSRAM), 4" 480×480 IPS (ST7701), GT911 touch. The panel's set-up lines and resets go through a TCA9554 IO expander |
 | Power | USB-C |
-| NFC | PN532 on the H3 header, set to UART: its VCC on pin 4 (3.3 V), GND on 20, TXD on 5 (GPIO43), RXD on 13 (IO0). Any ISO 14443A sticker works; only its UID is read |
+| NFC | PN532 on the H3 header, set to UART: its VCC on pin 4 (3.3 V), GND on 20, TXD on 5 (GPIO43), RXD on 13 (IO0), RSTPDN on 12 (EXIO3, so the board can reset it when it hangs). Any ISO 14443A sticker works; only its UID is read |
 
 The pins and panel set-up are in [`firmware/src/board.cpp`](firmware/src/board.cpp).
 

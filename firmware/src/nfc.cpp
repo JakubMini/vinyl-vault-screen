@@ -2,6 +2,7 @@
 
 #include <Adafruit_PN532.h>
 
+#include "board.h"
 #include "tag_gate.h"
 
 static volatile bool connected = false;
@@ -24,9 +25,18 @@ static void task(void *) {
   Adafruit_PN532 nfc(255, &Serial1);
   TagGate gate;
   bool present = false;
-  int quiet = 0;
+  int quiet = 0, tries = 0;
   for (;;) {
     if (!connected) {
+      // Now and then it hangs: powered, its TX idle, deaf to every frame at every baud, through any
+      // ESP32 restart. Only a reset brings it back.
+      if (++tries % 10 == 0) {
+        Serial.println(R"({"event":"nfc","reset":true})");
+        board_nfc_reset(true);
+        delay(10);
+        board_nfc_reset(false);
+        delay(10);
+      }
       // It is asleep at boot. A long preamble wakes it, but only with a command straight after, and
       // the first try usually fails anyway: hence the quick retry. Connects within a second.
       static const uint8_t wake[16] = {0x55, 0x55};  // then zeros
@@ -36,6 +46,7 @@ static void task(void *) {
       // One try per poll, so a read comes back at once when no tag is there.
       if (nfc.SAMConfig() && (version = nfc.getFirmwareVersion()) && nfc.setPassiveActivationRetries(1)) {
         connected = true;
+        tries = 0;
         Serial.printf("{\"event\":\"nfc\",\"connected\":true,\"firmware\":\"%lu.%lu\"}\n", (version >> 16) & 0xFF,
                       (version >> 8) & 0xFF);
       } else {

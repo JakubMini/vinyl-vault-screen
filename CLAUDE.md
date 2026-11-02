@@ -41,7 +41,7 @@ board and a small Worker.
   - `src/store.cpp`: the copy on LittleFS. Write only what changed: flash writes stall the panel.
   - `src/covers.cpp`: cover JPEGs held in PSRAM, decoded on a background task.
   - `src/nfc.cpp`: the PN532 on the H3 header, UART (ESP32 RX on GPIO43, TX on IO0), polled on
-    core 0. Each read goes through `include/tag_gate.h` (once per tag until another tag or 30 s
+    core 0. It hangs now and then (deaf, through ESP32 restarts); its RSTPDN on EXIO3 resets it. Each read goes through `include/tag_gate.h` (once per tag until another tag or 30 s
     away; tested in `test/test_tag_gate`). The tag-to-record copy lives in `sync.cpp`, which asks
     the vault about tags the board doesn't know, sends new ones, and sends a play each time a tag
     counts (kept on flash only while the vault can't be reached). Not SPI: H3 has only two GPIOs free (RX0 is driven by the USB-UART chip, IO19/20 are

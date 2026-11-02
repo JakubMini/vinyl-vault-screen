@@ -121,6 +121,26 @@ bool store_load_tags(std::map<String, Tag> &out) {
   return true;
 }
 
+bool store_save_plays(const std::vector<Play> &plays) {
+  JsonDocument doc;
+  doc.to<JsonArray>();
+  for (const Play &p : plays) {
+    JsonObject o = doc.add<JsonObject>();
+    o["id"] = p.id;
+    o["uid"] = p.uid;
+    o["at"] = (long long)p.at;
+  }
+  return write_json("/plays.json", doc);
+}
+
+bool store_load_plays(std::vector<Play> &out) {
+  JsonDocument doc;
+  if (!read_json("/plays.json", doc)) return false;
+  out.clear();
+  for (JsonObject o : doc.as<JsonArray>()) out.push_back({o["id"] | -1, o["uid"].as<String>(), (time_t)(o["at"] | 0LL)});
+  return true;
+}
+
 String store_cover_path(int id) { return "/c/" + String(id) + ".jpg"; }
 
 std::set<int> store_cover_ids() {

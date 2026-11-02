@@ -20,6 +20,9 @@ struct Tag {
 };
 bool store_load_tags(std::map<String, Tag> &out);
 bool store_save_tags(const std::map<String, Tag> &tags);  // true when the file changed
+// Plays not yet in the vault, kept only while it can't be reached.
+bool store_load_plays(std::vector<Play> &out);
+bool store_save_plays(const std::vector<Play> &plays);  // true when the file changed
 String store_cover_path(int id);    // a baseline JPEG, 240 px, made by the sync task
 std::set<int> store_cover_ids();    // ids with a cover on flash; one directory walk
 // Write a file whole: readers see the old one or the new one, never half of it.

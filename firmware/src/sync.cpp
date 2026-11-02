@@ -262,6 +262,49 @@ static bool tag_asked() {
   return asked;
 }
 
+// ---- plays -----------------------------------------------------------------------------------
+//
+// Each time a record's tag counts, a play goes to the vault for a yearly "wrapped". Held in RAM and
+// sent within a second when online; written to flash only if the vault can't be reached, so a
+// restart while offline doesn't lose them, and a play doesn't stall the panel when it can.
+
+static std::vector<Play> plays;  // under tags_lock
+static bool plays_on_flash;      // /plays.json holds plays not yet sent
+
+void sync_play(int id, const char *uid) {
+  const time_t now = time(nullptr);
+  xSemaphoreTake(tags_lock, portMAX_DELAY);
+  plays.push_back({id, uid, now > 1700000000 ? now : 0});
+  xSemaphoreGive(tags_lock);
+  Serial.printf("{\"event\":\"play\",\"record\":%d,\"uid\":\"%s\",\"at\":%ld}\n", id, uid, (long)now);
+  xTaskNotifyGive(sync_task);
+}
+
+static void serve_plays() {
+  static uint32_t failed_at;  // after a failure, try again in a minute
+  if (failed_at && millis() - failed_at < 60000) return;
+  xSemaphoreTake(tags_lock, portMAX_DELAY);
+  const std::vector<Play> batch(plays.begin(), plays.begin() + std::min<size_t>(plays.size(), 100));
+  xSemaphoreGive(tags_lock);
+  if (batch.empty()) return;
+
+  int code = -1;
+  if (WiFi.isConnected() && vault_linked() && (code = vault_plays(batch)) < 0) vault_close(), code = vault_plays(batch);
+  unlinked(code);
+  // 400: the vault will never take this batch, so it is dropped rather than retried for ever.
+  const bool done = code == 200 || code == 400;
+  xSemaphoreTake(tags_lock, portMAX_DELAY);
+  if (done) plays.erase(plays.begin(), plays.begin() + batch.size());
+  // Flash keeps the queue only while the vault can't be reached: after a failure, all of it; after
+  // a send, what is left, often nothing.
+  if (!done || plays_on_flash) {
+    store_save_plays(plays);
+    plays_on_flash = !plays.empty();
+  }
+  xSemaphoreGive(tags_lock);
+  failed_at = done ? 0 : millis() | 1;
+}
+
 // The screen is waiting on the vault: a sync stops fetching to let it go first.
 static bool screen_waiting() { return grade_asked() || tag_asked(); }
 
@@ -372,6 +415,7 @@ static void run() {
     if (store_save_records(fresh)) update([](SyncStatus &s) { s.records_gen++; });
   }
   serve_tags();
+  serve_plays();
   if (store_save_details(details)) update([](SyncStatus &s) { s.records_gen++; });
 
   // Covers that are missing or have changed, nearest the front of the wheel first.
@@ -433,6 +477,7 @@ static void task(void *) {
     Detail unused;
     serve_grade(unused);
     serve_tags();
+    serve_plays();
     keep_warm();
     const time_t now = time(nullptr);
     if (now < 1700000000) continue;  // no clock yet
@@ -451,6 +496,7 @@ void sync_begin() {
   lock = xSemaphoreCreateMutex();
   tags_lock = xSemaphoreCreateMutex();
   store_load_tags(tags);
+  plays_on_flash = store_load_plays(plays) && !plays.empty();
   prefs.begin("sync");
   status.last_ok = prefs.getULong64("last_ok", 0);
   // Core 0, away from LVGL on core 1: decoding a Discogs cover takes about a second. At idle

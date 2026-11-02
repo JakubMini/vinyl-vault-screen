@@ -22,6 +22,7 @@ void sync_tag_lookup(const char *uid);      // ask the vault, from the sync task
 bool sync_tag_found(int &status, int &id);  // true once, when the vault has answered: 200 with id, or 404
 int sync_tag_assign(const char *uid, int id);  // kept on the board now, sent to the vault by the sync
                                                // task; returns how many tags open that record
+void sync_play(int id, const char *uid);       // a record went on the stand: logged in the vault soon
 
 struct SyncStatus {
   bool running;

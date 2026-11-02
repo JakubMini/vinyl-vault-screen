@@ -257,3 +257,22 @@ int vault_set_tag(const String &uid, int id) {
   serializeJson(body, json);
   return call("PUT", "/api/tags/" + uid, json, doc, nullptr, true);
 }
+
+int vault_plays(const std::vector<Play> &plays) {
+  JsonDocument body, doc;
+  for (const Play &p : plays) {
+    JsonObject o = body["plays"].add<JsonObject>();
+    o["record_id"] = p.id;
+    o["tag_uid"] = p.uid;
+    if (p.at) {
+      char at[24];
+      tm t;
+      gmtime_r(&p.at, &t);
+      strftime(at, sizeof at, "%Y-%m-%dT%H:%M:%SZ", &t);
+      o["played_at"] = at;
+    }
+  }
+  String json;
+  serializeJson(body, json);
+  return call("POST", "/api/plays", json, doc, nullptr, true);
+}

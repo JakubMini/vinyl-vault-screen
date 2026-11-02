@@ -27,6 +27,7 @@ describe("gateway", () => {
     ["PATCH", "/api/records/42"],
     ["GET", "/api/tags/04C67BA5892681"],
     ["PUT", "/api/tags/04C67BA5892681"],
+    ["POST", "/api/plays"],
   ])("forwards %s %s", async (method, path) => {
     const { response, seen } = call(method, path);
     expect((await response).status).toBe(200);
@@ -44,6 +45,7 @@ describe("gateway", () => {
     ["GET", "/api/records/42/../../sync/runs"],
     ["DELETE", "/api/tags/04C67BA5892681"],
     ["GET", "/api/tags/../devices"],
+    ["GET", "/api/plays"],
     ["GET", "/"],
   ])("refuses %s %s", async (method, path) => {
     const { response, seen } = call(method, path);

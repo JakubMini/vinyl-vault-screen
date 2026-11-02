@@ -1015,7 +1015,8 @@ static void open_clock() {
 //
 // A sleeve's tag opens its record: the crate spins round to it, then its page opens. A tag the
 // board doesn't know is looked up in the vault; one the vault doesn't know either is assigned here,
-// to the record on screen or one chosen on the crate. A record may have several tags.
+// to the record on screen or one chosen on the crate. A record may have several tags. Each time a
+// tag counts for a record, that is a play, logged in the vault (sync_play).
 
 // A line at the very top of every screen for a few seconds, under "NFC Not Found" if that is up.
 static const char *note_text = "";
@@ -1049,6 +1050,7 @@ static bool go_to(int id) {
 
 static void assign_tag(int index) {
   const int count = sync_tag_assign(tag.uid.c_str(), records[index].id);
+  sync_play(records[index].id, tag.uid.c_str());  // it went on the stand to be assigned
   Serial.printf("{\"event\":\"tag_assigned\",\"uid\":\"%s\",\"record\":%d,\"tags\":%d}\n", tag.uid.c_str(),
                 records[index].id, count);
   String line = count > 1 ? "Tag assigned · " + String(count) + " tags open this record" : String("Tag assigned");
@@ -1133,7 +1135,7 @@ static void tag_answered(int status, int id) {
   if (!tags_here || unlinked(status)) return;
   Serial.printf("{\"event\":\"tag\",\"uid\":\"%s\",\"from\":\"vault\",\"status\":%d,\"record\":%d}\n",
                 tag.uid.c_str(), status, id);
-  if (status == 200 && go_to(id)) return;
+  if (status == 200 && go_to(id)) return sync_play(id, tag.uid.c_str());
   tag.offline = status != 200 && status != 404;
   if (tag.offline) note("Vault offline · tags are sent when it's back", DOWN, 6000);
   open_tag_prompt();
@@ -1149,8 +1151,9 @@ static void tag_tick(lv_timer_t *) {
   }
   char uid[21];
   if (!nfc_take(uid)) return;
-  if (!tags_here) {
+  if (!tags_here) {  // still a play, if the board knows the tag
     Serial.printf("{\"event\":\"tag\",\"uid\":\"%s\",\"ignored\":true}\n", uid);
+    if ((id = sync_tag_record(uid)) >= 0) sync_play(id, uid);
     return;
   }
   lv_display_trigger_activity(nullptr);  // a tap of a tag is a touch: no clock straight after
@@ -1163,7 +1166,8 @@ static void tag_tick(lv_timer_t *) {
   id = sync_tag_record(uid);
   Serial.printf("{\"event\":\"tag\",\"uid\":\"%s\",\"from\":\"board\",\"record\":%d}\n", uid, id);
   if (id >= 0) {
-    if (!go_to(id)) open_tag_prompt();  // its record has left the collection: assign it again
+    if (go_to(id)) sync_play(id, uid);
+    else open_tag_prompt();  // its record has left the collection: assign it again
     return;
   }
   tag.looking = true;

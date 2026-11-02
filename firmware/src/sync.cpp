@@ -213,8 +213,11 @@ static bool grade_asked() {
 
 // ---- NFC tags --------------------------------------------------------------------------------
 
-static SemaphoreHandle_t tags_lock;  // not `lock`: saving tags touches flash, and sync_status() mustn't wait
+// The UI only ever holds tags_lock for a lookup or an insert: /tags.json is written by the sync task
+// alone, from a copy, outside the lock, so a tap never waits on flash.
+static SemaphoreHandle_t tags_lock;
 static std::map<String, Tag> tags;
+static bool tags_dirty;  // changed since /tags.json was written
 static struct {
   bool asked, done;
   String uid;
@@ -247,7 +250,7 @@ bool sync_tag_found(int &status, int &id) {
 int sync_tag_assign(const char *uid, int id) {
   xSemaphoreTake(tags_lock, portMAX_DELAY);
   tags[uid] = {id, false};
-  store_save_tags(tags);
+  tags_dirty = true;
   int count = 0;
   for (const auto &[u, t] : tags) count += t.id == id;
   xSemaphoreGive(tags_lock);
@@ -255,45 +258,61 @@ int sync_tag_assign(const char *uid, int id) {
   return count;
 }
 
+// A lookup to answer, or an assignment to put on flash and send.
 static bool tag_asked() {
   xSemaphoreTake(tags_lock, portMAX_DELAY);
-  const bool asked = looking.asked;
+  const bool asked = looking.asked || tags_dirty;
   xSemaphoreGive(tags_lock);
   return asked;
 }
 
+// Sync task only.
+static void save_tags() {
+  xSemaphoreTake(tags_lock, portMAX_DELAY);
+  const bool dirty = tags_dirty;
+  tags_dirty = false;
+  const std::map<String, Tag> copy = dirty ? tags : std::map<String, Tag>();
+  xSemaphoreGive(tags_lock);
+  if (dirty) store_save_tags(copy);
+}
+
 // ---- plays -----------------------------------------------------------------------------------
 //
-// Each time a record's tag counts, a play goes to the vault for a yearly "wrapped". Held in RAM and
-// sent within a second when online; written to flash only if the vault can't be reached, so a
-// restart while offline doesn't lose them, and a play doesn't stall the panel when it can.
+// Each time a record's tag counts, a play goes to the vault for a yearly "wrapped". The UI only drops
+// it in a queue, which never waits; everything else happens here on core 0. Sent within a second
+// when online; written to flash only if the vault can't be reached, so a restart while offline
+// doesn't lose them, and a play doesn't stall the panel when it can.
 
-static std::vector<Play> plays;  // under tags_lock
-static bool plays_on_flash;      // /plays.json holds plays not yet sent
+struct PlayNote {
+  int id;
+  char uid[21];
+  time_t at;
+};
+static QueueHandle_t play_inbox;  // from the UI, 32 deep
+static std::vector<Play> plays;   // sync task only: waiting to be sent
+static bool plays_on_flash;       // /plays.json holds plays not yet sent
 
 void sync_play(int id, const char *uid) {
-  const time_t now = time(nullptr);
-  xSemaphoreTake(tags_lock, portMAX_DELAY);
-  plays.push_back({id, uid, now > 1700000000 ? now : 0});
-  xSemaphoreGive(tags_lock);
-  Serial.printf("{\"event\":\"play\",\"record\":%d,\"uid\":\"%s\",\"at\":%ld}\n", id, uid, (long)now);
-  xTaskNotifyGive(sync_task);
+  PlayNote note{id, "", time(nullptr)};
+  strlcpy(note.uid, uid, sizeof note.uid);
+  if (xQueueSend(play_inbox, &note, 0) == pdTRUE) xTaskNotifyGive(sync_task);
+  else Serial.printf("{\"event\":\"play_dropped\",\"record\":%d}\n", id);  // 32 waiting: the sync task is stuck
 }
 
 static void serve_plays() {
+  for (PlayNote n; xQueueReceive(play_inbox, &n, 0) == pdTRUE;) {
+    Serial.printf("{\"event\":\"play\",\"record\":%d,\"uid\":\"%s\",\"at\":%ld}\n", n.id, n.uid, (long)n.at);
+    plays.push_back({n.id, n.uid, n.at > 1700000000 ? n.at : 0});
+  }
   static uint32_t failed_at;  // after a failure, try again in a minute
-  if (failed_at && millis() - failed_at < 60000) return;
-  xSemaphoreTake(tags_lock, portMAX_DELAY);
+  if (plays.empty() || (failed_at && millis() - failed_at < 60000)) return;
   const std::vector<Play> batch(plays.begin(), plays.begin() + std::min<size_t>(plays.size(), 100));
-  xSemaphoreGive(tags_lock);
-  if (batch.empty()) return;
 
   int code = -1;
   if (WiFi.isConnected() && vault_linked() && (code = vault_plays(batch)) < 0) vault_close(), code = vault_plays(batch);
   unlinked(code);
   // 400: the vault will never take this batch, so it is dropped rather than retried for ever.
   const bool done = code == 200 || code == 400;
-  xSemaphoreTake(tags_lock, portMAX_DELAY);
   if (done) plays.erase(plays.begin(), plays.begin() + batch.size());
   // Flash keeps the queue only while the vault can't be reached: after a failure, all of it; after
   // a send, what is left, often nothing.
@@ -301,7 +320,6 @@ static void serve_plays() {
     store_save_plays(plays);
     plays_on_flash = !plays.empty();
   }
-  xSemaphoreGive(tags_lock);
   failed_at = done ? 0 : millis() | 1;
 }
 
@@ -325,15 +343,16 @@ static void serve_tags() {
     if (online && (code = vault_tag(uid, id)) < 0) vault_close(), code = vault_tag(uid, id);
     unlinked(code);
     xSemaphoreTake(tags_lock, portMAX_DELAY);
-    if (code == 200 && id > 0) tags[uid] = {id, true}, store_save_tags(tags);
+    if (code == 200 && id > 0) tags[uid] = {id, true}, tags_dirty = true;
     looking.done = true, looking.status = code, looking.id = id;
     xSemaphoreGive(tags_lock);
   }
 
+  save_tags();  // what was assigned or learnt, before trying the network
   static uint32_t failed_at;  // after a failure, try again in a minute
   if (unsent.empty() || !online || (failed_at && millis() - failed_at < 60000)) return;
   failed_at = 0;
-  std::vector<String> sent;
+  std::vector<std::pair<String, int>> sent;
   for (const auto &[u, id] : unsent) {
     int code = vault_set_tag(u, id);
     if (code < 0) vault_close(), code = vault_set_tag(u, id);
@@ -342,15 +361,16 @@ static void serve_tags() {
       failed_at = millis() | 1;
       break;
     }
-    sent.push_back(u);
+    sent.push_back({u, id});
   }
   xSemaphoreTake(tags_lock, portMAX_DELAY);
-  for (const String &u : sent) {
+  for (const auto &[u, id] : sent) {
     auto t = tags.find(u);
-    if (t != tags.end()) t->second.sent = true;  // assigned again since? then still unsent, as it should be
+    // Assigned to another record meanwhile? Then it stays unsent, and goes next time.
+    if (t != tags.end() && t->second.id == id && !t->second.sent) t->second.sent = tags_dirty = true;
   }
-  if (!sent.empty()) store_save_tags(tags);
   xSemaphoreGive(tags_lock);
+  save_tags();
 }
 
 // While the sync waits, or after its prices: on the gateway connection, warm if the page kept it so.
@@ -497,6 +517,7 @@ void sync_begin() {
   tags_lock = xSemaphoreCreateMutex();
   store_load_tags(tags);
   plays_on_flash = store_load_plays(plays) && !plays.empty();
+  play_inbox = xQueueCreate(32, sizeof(PlayNote));
   prefs.begin("sync");
   status.last_ok = prefs.getULong64("last_ok", 0);
   // Core 0, away from LVGL on core 1: decoding a Discogs cover takes about a second. At idle

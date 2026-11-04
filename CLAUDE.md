@@ -64,3 +64,8 @@ board and a small Worker.
   itself for 12 s and logs `{"event":"profile",...}` every second. A `-DGRADE_BENCH` build opens a
   record and saves its sleeve grade as it already is, four times (one during a sync), and logs
   `{"event":"grade_saved",...,"ms":...}` from tap to answer.
+- The panel logs `{"event":"panel","frames":...,"missed":...}` when frames were missed (a bounce-buffer
+  refill came too late). A `-DPANEL_BENCH` build, once Wi-Fi is up, logs
+  `{"event":"panel_bench",...}` every second through 20 s idle, 20 s of flash writes and a sync.
+- The IDF settings in `custom_sdkconfig` (platformio.ini) keep the panel fed during flash writes.
+  Changing them rebuilds the IDF libraries; measure with `-DPANEL_BENCH` before and after.

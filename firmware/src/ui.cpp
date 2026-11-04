@@ -13,6 +13,7 @@
 #include "sync.h"
 #include "vault.h"
 #include "record_art.h"
+#include "crate_letters.h"
 #include "wheel.h"
 
 LV_FONT_DECLARE(font_16);
@@ -554,12 +555,19 @@ static struct {
   lv_timer_t *timer;
   String sync_text;
   bool picker;  // choosing a record for a new NFC tag
-  // Spinning to a tagged record by itself: pos goes from spin_from to spin_to, eased, from
-  // spin_start for spin_ms; then, after a beat, its page opens.
-  bool spinning;
+  // Spinning to a record by itself: pos goes from spin_from to spin_to, eased, from spin_start for
+  // spin_ms; then, after a beat, a tagged record's page opens (open_on_land).
+  bool spinning, open_on_land;
   float spin_from, spin_to;
   uint32_t spin_start, spin_ms;
+  // A finger on the bar picks a first letter, shown in the bubble above it; lifting goes there.
+  bool scrubbing;
+  std::vector<CrateLetter> letters;
+  int letter;
+  lv_obj_t *bubble;
 } wheel;
+
+constexpr int BAR_TOP = 428;  // the bar at y 440 and the readouts under it; above is the picker's button
 
 static void want_covers_around(int front) {
   const int n = records.size();
@@ -756,7 +764,7 @@ static void tick(lv_timer_t *) {
     if (now - wheel.spin_start > wheel.spin_ms + 300) {  // landed, and a beat to see it
       wheel.spinning = false;
       wheel.target = wheel.spin_to;
-      return open_record(wheel_index(lroundf(wheel.spin_to), records.size()));
+      if (wheel.open_on_land) return open_record(wheel_index(lroundf(wheel.spin_to), records.size()));
     }
   }
   if (!isnan(wheel.target) && wheel.pos != wheel.target) {
@@ -804,9 +812,38 @@ static void tick(lv_timer_t *) {
   }
 }
 
+static void spin_to(int index);
+
+// The bubble over the bar, on the letter under the finger at x.
+static void scrub(int32_t x) {
+  const int n = wheel.letters.size();
+  wheel.letter = letter_at(x, 16, 448, n);
+  lv_label_set_text(lv_obj_get_child(wheel.bubble, 0), wheel.letters[wheel.letter].text);
+  const int32_t cx = 16 + (448 * (2 * wheel.letter + 1)) / (2 * n);  // the middle of its slice
+  lv_obj_set_x(wheel.bubble, constrain(cx, 16 + 36, 464 - 36) - 36);
+}
+
 static void touched(lv_event_t *e) {
   lv_indev_t *indev = lv_indev_active();
   const lv_event_code_t code = lv_event_get_code(e);
+  lv_point_t at;
+  lv_indev_get_point(indev, &at);
+  if (code == LV_EVENT_PRESSED && at.y >= BAR_TOP && !records.empty()) {
+    wheel.spinning = false;
+    wheel.target = roundf(wheel.pos);
+    wheel.letters = crate_letters(records.size(), [](int i) { return records[i].artist.c_str(); });
+    wheel.scrubbing = !wheel.letters.empty();
+    if (!wheel.scrubbing) return;
+    lv_obj_set_hidden(wheel.bubble, false);
+    return scrub(at.x);
+  }
+  if (wheel.scrubbing) {
+    if (code == LV_EVENT_PRESSING) return scrub(at.x);
+    if (code != LV_EVENT_RELEASED) return;
+    wheel.scrubbing = false;
+    lv_obj_set_hidden(wheel.bubble, true);
+    return spin_to(wheel.letters[wheel.letter].first);
+  }
   if (code == LV_EVENT_PRESSED) {
     wheel.spinning = false;  // a finger stops a spin to a tagged record
     wheel.target = NAN;
@@ -908,6 +945,12 @@ static void build_wheel(bool picker) {
   wheel.needle = dot(s, 16, 440, 9, ACCENT);
   wheel.sync = readout(s, 452, false, picker ? ("tag " + tag.uid).c_str() : "");
   wheel.count = readout(s, 452, true, "");
+  wheel.bubble = dot(s, 16, 388, 72, ACCENT);  // over the price while a finger is on the bar
+  lv_obj_t *letter = label(wheel.bubble, &font_44, BG, 72);
+  lv_obj_set_style_text_align(letter, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_center(letter);
+  lv_obj_set_hidden(wheel.bubble, true);
+  wheel.scrubbing = false;
 #ifdef WHEEL_BENCH
   wheel.fps = label(s, &font_mono_14, DIM, 200);  // the frame-rate readout, for tuning
   lv_obj_align(wheel.fps, LV_ALIGN_TOP_MID, 0, 19);
@@ -1035,6 +1078,14 @@ static bool go_to(int id) {
   if (index < 0) return false;
   if (lv_screen_active() == idle_screen && idle_screen != wheel.screen && view.index == index) return true;  // open already
   if (lv_screen_active() != wheel.screen || wheel.picker) open_wheel();
+  spin_to(index);
+  wheel.open_on_land = true;
+  return true;
+}
+
+// Spin the crate the short way round to records[index], and stop there.
+static void spin_to(int index) {
+  const int n = records.size();
   const float from = wheel.pos;
   int steps = wheel_index(index - (int)lroundf(from), n);
   if (steps > n / 2) steps -= n;
@@ -1043,9 +1094,9 @@ static bool go_to(int id) {
   wheel.spin_start = millis();
   wheel.spin_ms = constrain(600 + 25 * abs(steps), 600, 1800);
   wheel.spinning = true;
+  wheel.open_on_land = false;
   wheel.target = NAN;
   want_covers_around(index);
-  return true;
 }
 
 static void assign_tag(int index) {

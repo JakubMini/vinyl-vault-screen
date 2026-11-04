@@ -32,7 +32,8 @@ The price at every grade is right there on the buttons.
   plays made offline go to the vault once it's back online.
 - **Browses on a wheel.** Covers ride the rim of a big wheel: the one in front is largest, the
   ones before and after shrink and fade round the rim. Drag it, fling it, tap a side cover to
-  step to it. It wraps round, so the last record sits before the first.
+  step to it. It wraps round, so the last record sits before the first. Slide a finger along the bar
+  at the bottom to pick a first letter, and lift it to spin to the first artist with it.
 - **Shows the money.** Current value, change over 30 days, a price history line, and the price
   at each grade from M to P.
 - **Grades by touch.** A new grade is saved to the vault straight away, and the record is

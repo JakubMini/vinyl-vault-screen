@@ -1237,6 +1237,14 @@ static void open_link() {
 static String wifi_ssid;
 static void open_password(const char *error);
 
+static void join(const String &pass) {
+  message(("Joining " + wifi_ssid + "…").c_str());
+  if (wifi_connect(wifi_ssid, pass)) return start();
+  open_password("Couldn't join. Check the password and try again.");
+}
+
+// Asked at every power-up: the board goes from place to place, and remembers each password.
+
 static void open_wifi() {
   message("Looking for Wi-Fi networks…");
   const std::vector<String> networks = wifi_scan();
@@ -1268,14 +1276,19 @@ static void open_wifi() {
     lv_obj_t *track = label(row, &font_mono_14, DIM, 40);
     lv_label_set_text_fmt(track, "A%u", (unsigned)i + 1);
     lv_obj_align(track, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_t *name = label(row, &font_22, TEXT, 370);
+    lv_obj_t *name = label(row, &font_22, TEXT, 330);
     lv_label_set_text(name, networks[i].c_str());
     lv_obj_align(name, LV_ALIGN_LEFT_MID, 44, 0);
-    lv_obj_t *more = label(row, &font_22, DIM, 20);
-    lv_label_set_text(more, "›");
+    String pass;
+    const bool known = wifi_known(networks[i], pass);
+    lv_obj_t *more = label(row, known ? &font_mono_14 : &font_22, DIM, known ? 60 : 20);
+    lv_label_set_text(more, known ? "Saved" : "›");
+    lv_obj_set_style_text_align(more, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(more, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_add_event_cb(row, [](lv_event_t *e) {
       wifi_ssid = lv_label_get_text(lv_obj_get_child(lv_event_get_target_obj(e), 1));
+      String pass;
+      if (wifi_known(wifi_ssid, pass)) return join(pass);
       open_password(nullptr);
     }, LV_EVENT_CLICKED, nullptr);
   }
@@ -1285,19 +1298,23 @@ static void open_wifi() {
     lv_obj_set_height(none, LV_SIZE_CONTENT);
     lv_label_set_text(none, "No networks found. The screen only sees 2.4 GHz Wi-Fi.");
   }
-  lv_obj_t *again = button(s, "Scan again", 448, 56);
+  // With a collection on the board, it works without Wi-Fi too; the sync catches up later.
+  const bool can_skip = vault_linked() && (!records.empty() || load_collection());
+  lv_obj_t *again = button(s, "Scan again", can_skip ? 216 : 448, 56);
   lv_obj_set_pos(again, 16, 408);
   lv_obj_add_event_cb(again, [](lv_event_t *) { open_wifi(); }, LV_EVENT_CLICKED, nullptr);
+  if (can_skip) {
+    lv_obj_t *skip = button(s, "Skip Wi-Fi", 216, 56);
+    lv_obj_set_pos(skip, 248, 408);
+    lv_obj_add_event_cb(skip, [](lv_event_t *) { start(); }, LV_EVENT_CLICKED, nullptr);
+  }
   show(s);
 }
 
 // The keyboard's tick (READY) joins; its keyboard key (CANCEL) goes back to the list.
 static void keyboard_done(lv_event_t *e) {
   if (lv_event_get_code(e) == LV_EVENT_CANCEL) return open_wifi();
-  const String pass = lv_textarea_get_text(lv_keyboard_get_textarea(lv_event_get_target_obj(e)));
-  message(("Joining " + wifi_ssid + "…").c_str());
-  if (wifi_connect(wifi_ssid, pass)) return start();
-  open_password("Couldn't join. Check the password and try again.");
+  join(lv_textarea_get_text(lv_keyboard_get_textarea(lv_event_get_target_obj(e))));
 }
 
 static void open_password(const char *error) {
@@ -1386,12 +1403,5 @@ void ui_begin() {
 #ifdef GRADE_BENCH
   lv_timer_create(grade_bench, 100, nullptr);
 #endif
-  String ssid;
-  if (!wifi_saved(ssid)) return open_wifi();
-  message(("Joining " + ssid + "…").c_str());
-  if (wifi_reconnect()) return start();
-  // Offline: show what the board has, if anything; the sync task retries when Wi-Fi returns.
-  if (vault_linked() && load_collection()) return open_wheel();
-  problem(("Couldn't join " + ssid + ".\nTap to try again, or hold to choose another network.").c_str(),
-          [] { if (wifi_reconnect()) start(); else open_wifi(); });
+  open_wifi();
 }

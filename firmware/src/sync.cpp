@@ -362,6 +362,7 @@ static void serve_tags() {
       break;
     }
     sent.push_back({u, id});
+    Serial.printf("{\"event\":\"tag_sent\",\"uid\":\"%s\",\"record\":%d,\"status\":%d}\n", u.c_str(), id, code);
   }
   xSemaphoreTake(tags_lock, portMAX_DELAY);
   for (const auto &[u, id] : sent) {

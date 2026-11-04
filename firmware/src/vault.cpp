@@ -15,26 +15,33 @@ const char *const GRADES[GRADE_COUNT] = {"M", "NM", "VG+", "VG", "G+", "G", "F",
 static Preferences prefs;
 static String token;
 
-// Wi-Fi details live in NVS next to the token, so a reset reconnects on its own.
-// shortcut: NVS is not encrypted, so the Wi-Fi password sits in flash in plain text; turn on
+// Wi-Fi details live in NVS next to the token. Every network joined, with its password, in one key
+// as JSON ({"ssid": "password"}): NVS key names stop at 15 characters, network names at 32.
+// shortcut: NVS is not encrypted, so the Wi-Fi passwords sit in flash in plain text; turn on
 // flash and NVS encryption before the board leaves the house.
 static void open_prefs() {
   static bool opened = false;
-  if (!opened) opened = prefs.begin("vault");
-  token = prefs.getString("token");
-#ifdef WIFI2_SSID
-  // A one-off build seeds the fallback network; normal builds keep whatever NVS holds.
-  if (prefs.getString("ssid2") != WIFI2_SSID || prefs.getString("pass2") != WIFI2_PASS) {
-    prefs.putString("ssid2", WIFI2_SSID);
-    prefs.putString("pass2", WIFI2_PASS);
+  if (!opened && (opened = prefs.begin("vault")) && !prefs.isKey("nets")) {
+    // From the older firmware's one remembered network and its fallback.
+    JsonDocument doc;
+    doc.to<JsonObject>();
+    const String ssid = prefs.getString("ssid"), ssid2 = prefs.getString("ssid2");
+    if (!ssid2.isEmpty()) doc[ssid2] = prefs.getString("pass2");
+    if (!ssid.isEmpty()) doc[ssid] = prefs.getString("pass");
+    String json;
+    serializeJson(doc, json);
+    if (prefs.putString("nets", json)) for (const char *k : {"ssid", "pass", "ssid2", "pass2"}) prefs.remove(k);
   }
-#endif
+  token = prefs.getString("token");
 }
 
-bool wifi_saved(String &ssid) {
+bool wifi_known(const String &ssid, String &pass) {
   open_prefs();
-  ssid = prefs.getString("ssid");
-  return !ssid.isEmpty();
+  JsonDocument doc;
+  deserializeJson(doc, prefs.getString("nets"));
+  if (!doc[ssid].is<const char *>()) return false;
+  pass = doc[ssid].as<String>();
+  return true;
 }
 
 std::vector<String> wifi_scan() {
@@ -66,27 +73,21 @@ bool wifi_connect(const String &ssid, const String &pass) {
       return false;
     }
   }
-  prefs.putString("ssid", ssid);
-  prefs.putString("pass", pass);
+  String known;
+  if (!wifi_known(ssid, known) || known != pass) {  // NVS writes only what changed
+    JsonDocument doc;
+    deserializeJson(doc, prefs.getString("nets"));
+    doc[ssid] = pass;
+    String json;
+    serializeJson(doc, json);
+    prefs.putString("nets", json);
+  }
   // TLS checks certificate dates, so the clock has to be right first.
   // UK time for the idle clock; time() stays UTC, so TLS and sync are unaffected.
   configTzTime("GMT0BST,M3.5.0/1,M10.5.0", "pool.ntp.org", "time.cloudflare.com");
   for (uint32_t start = millis(); time(nullptr) < 1700000000 && millis() - start < 10000;) delay(100);
   Serial.printf("{\"event\":\"wifi\",\"ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"linked\":%s}\n", ssid.c_str(),
                 WiFi.localIP().toString().c_str(), WiFi.RSSI(), token.isEmpty() ? "false" : "true");
-  return true;
-}
-
-// Tries the remembered network, then the fallback. Whichever joins is tried first next time.
-bool wifi_reconnect() {
-  String ssid;
-  if (!wifi_saved(ssid)) return false;
-  const String pass = prefs.getString("pass");
-  if (wifi_connect(ssid, pass)) return true;
-  const String ssid2 = prefs.getString("ssid2"), pass2 = prefs.getString("pass2");
-  if (ssid2.isEmpty() || ssid2 == ssid || !wifi_connect(ssid2, pass2)) return false;
-  prefs.putString("ssid2", ssid);  // wifi_connect made the fallback the primary; keep the old one
-  prefs.putString("pass2", pass);
   return true;
 }
 

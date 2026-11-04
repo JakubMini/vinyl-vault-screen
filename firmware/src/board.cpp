@@ -6,6 +6,7 @@
 #include <Arduino_GFX_Library.h>
 #include <Wire.h>
 #include <bb_captouch.h>
+#include <esp_lcd_panel_rgb.h>
 #include <rom/cache.h>
 
 static constexpr int BUS_SDA = 47, BUS_SCL = 48;  // shared by the expander, the touch, the codec and the PMU
@@ -26,6 +27,33 @@ static Arduino_ESP32RGBPanel *panel = new Arduino_ESP32RGBPanel(
 static Arduino_RGB_Display *gfx = new Arduino_RGB_Display(
     BOARD_W, BOARD_H, panel, 0, true, expander, GFX_NOT_DEFINED, st7701_type1_init_operations,
     sizeof(st7701_type1_init_operations));
+
+// Arduino_GFX keeps the panel's handle private. An explicit instantiation may name a private member,
+// so this reads it without patching the library.
+using HandleField = esp_lcd_panel_handle_t Arduino_ESP32RGBPanel::*;
+HandleField handle_field();
+template <HandleField F> struct Expose { friend HandleField handle_field() { return F; } };
+template struct Expose<&Arduino_ESP32RGBPanel::_panel_handle>;
+
+// Each frame's bounce refills reach the end of the framebuffer once, between two VSYNCs. A frame
+// that doesn't had a refill held off past a whole bounce buffer, and showed stale or shifted lines.
+static volatile uint32_t frames, missed_frames;
+static volatile bool filled;
+static IRAM_ATTR bool on_vsync(esp_lcd_panel_handle_t, const esp_lcd_rgb_panel_event_data_t *, void *) {
+  frames++;
+  if (!filled) missed_frames++;
+  filled = false;
+  return false;
+}
+static IRAM_ATTR bool on_filled(esp_lcd_panel_handle_t, const esp_lcd_rgb_panel_event_data_t *, void *) {
+  filled = true;
+  return false;
+}
+
+void board_panel_stats(uint32_t &sent, uint32_t &missed) {
+  sent = frames;
+  missed = missed_frames;
+}
 
 static BBCapTouch touch;
 static constexpr int BACKLIGHT = 4;  // active low
@@ -59,6 +87,10 @@ void board_begin() {
   Wire.begin(BUS_SDA, BUS_SCL);  // before the panel: the expander's begin() takes Wire's default pins otherwise
   xTaskCreatePinnedToCore([](void *) {
     if (!gfx->begin()) Serial.println(R"({"event":"display_failed"})");
+    esp_lcd_rgb_panel_event_callbacks_t cbs = {};
+    cbs.on_vsync = on_vsync;
+    cbs.on_frame_buf_complete = on_filled;
+    esp_lcd_rgb_panel_register_event_callbacks(panel->*handle_field(), &cbs, nullptr);
     xTaskNotifyGive(caller);
     vTaskDelete(nullptr);
   }, "panel", 4096, nullptr, 5, nullptr, 0);
@@ -96,6 +128,15 @@ void board_begin() {
   lv_indev_t *indev = lv_indev_create();
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, read_touch);
+
+  // A line whenever frames were missed in the last 10 s; nothing while the panel keeps up.
+  lv_timer_create([](lv_timer_t *) {
+    static uint32_t seen;
+    uint32_t sent, missed;
+    board_panel_stats(sent, missed);
+    if (missed != seen) Serial.printf("{\"event\":\"panel\",\"frames\":%lu,\"missed\":%lu}\n", sent, missed);
+    seen = missed;
+  }, 10000, nullptr);
 }
 
 // Rows go into the panel's framebuffer with memcpy, then out of the CPU cache to PSRAM, where the

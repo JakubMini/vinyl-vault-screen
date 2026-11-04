@@ -36,5 +36,9 @@ jobs:
           path: ~/.platformio
           key: pio-${{ hashFiles('firmware/platformio.ini') }}
       - run: pip install platformio
+      # custom_sdkconfig makes pioarduino build twice, the second time with the core in its own penv.
+      # Its newest core, 6.2.0.post1, fails the platform's ">=6.2.0" check; a penv made here with
+      # 6.2.0 is kept as it is.
+      - run: python -m venv ~/.platformio/penv && ~/.platformio/penv/bin/pip install "pioarduino==6.2.0"
       - run: pio test -e native
       - run: pio run -e screen

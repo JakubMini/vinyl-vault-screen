@@ -106,13 +106,18 @@ from a profile taken while the wheel spins itself (`-DWHEEL_BENCH`):
 | Covers 25% smaller, copy with `memcpy` | 26 |
 | Panel's interrupt moved to the other core, text redrawn less | 30 |
 | `-O2`, background filled by rows, text only when the wheel slows | 34–42 |
+| Code run from PSRAM, 64-byte cache lines (below) | 35 → 40 |
 
 The chip shares one memory bus between flash, PSRAM and the panel, which reads the frame out of
 PSRAM about 40 times a second. That bus is now the limit.
 
-**Keeping the display clean.** Writing to flash pauses that bus, which shows as streaks on the
-panel. So the board writes only what changed, all the price histories go in one file, and nothing
-touches flash while you browse.
+**Keeping the display clean.** The panel's interrupt copies the frame out of PSRAM 20 rows at a
+time, and a copy held off for more than about a millisecond is a frame with stale or shifted lines.
+Writing to flash used to take PSRAM away for longer than that, and the ESP-IDF build Arduino ships
+left one such frame shifting the picture until another came along. Now the code runs from PSRAM,
+so a flash write leaves PSRAM alone, and a late copy costs at most one frame. Measured with
+`-DPANEL_BENCH`, frames missed in 20 s of back-to-back flash writes went from 263 of 837 to none.
+The board still writes only what changed, and nothing touches flash while you browse.
 
 ## Hardware
 
@@ -128,7 +133,7 @@ The pins and panel set-up are in [`firmware/src/board.cpp`](firmware/src/board.c
 
 | Part | Choice | Why |
 | --- | --- | --- |
-| Firmware | PlatformIO, Arduino core 3 ([pioarduino](https://github.com/pioarduino/platform-espressif32)) | Core 3 (ESP-IDF 5) has bounce buffers for the RGB panel, which keep it steady while Wi-Fi is busy. |
+| Firmware | PlatformIO, Arduino core 3 ([pioarduino](https://github.com/pioarduino/platform-espressif32)) | Core 3 (ESP-IDF 5) has bounce buffers for the RGB panel, which keep it steady while Wi-Fi is busy. pioarduino can rebuild its IDF libraries with Espressif's display settings (`custom_sdkconfig`); the first build takes a few minutes longer. |
 | UI | [LVGL 9](https://lvgl.io) | Screens, text, keyboard, QR code, chart. The wheel is drawn by hand (see above). |
 | Display | [Arduino_GFX](https://github.com/moononournation/Arduino_GFX) | Ships this board's panel init sequence. |
 | Images | stb_image once, then [JPEGDEC](https://github.com/bitbank2/JPEGDEC) | Progressive originals once; fast baseline copies every time after. |

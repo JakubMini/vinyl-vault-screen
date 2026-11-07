@@ -333,8 +333,11 @@ int vault_cover(int id, uint8_t *&rgb, int &w, int &h) {
 
 int vault_firmware(const std::function<void(size_t, size_t)> &progress) {
   open_prefs();
+  // All 64 hex digits, as the vault keeps them: esp_app_get_elf_sha256 stops at
+  // CONFIG_APP_RETRIEVE_LEN_ELF_SHA (9), so it would never match and every sync would start a download.
   char running[65];
-  esp_app_get_elf_sha256(running, sizeof running);
+  const uint8_t *sha = esp_app_get_description()->app_elf_sha256;
+  for (int i = 0; i < 32; i++) snprintf(running + 2 * i, 3, "%02x", sha[i]);
   JsonDocument doc;
   return call("GET", "/api/firmware/bin?running=" + String(running), "", doc, nullptr, true, [&](HTTPClient &http) {
     const String build = http.header("X-Firmware-Build");

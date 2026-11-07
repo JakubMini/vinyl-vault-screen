@@ -495,6 +495,7 @@ static void task(void *) {
   time_t retry_at = 0;
   for (;;) {
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));  // or sooner, for a grade or a tag
+    wifi_keep();
     Detail unused;
     serve_grade(unused);
     serve_tags();

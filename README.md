@@ -71,8 +71,8 @@ the vault's API key can't be used to get round Access. The vault checks every to
 screen's token can read records and their covers, change grades, look up or assign NFC tags, log
 plays and fetch a new build of its firmware, nothing more.
 
-**Updates over Wi-Fi.** I upload `firmware.bin` on the vault's Screens page (`/link`), which keeps one
-build in R2. At the end of each sync the board asks for it, with the build it runs; if the vault has
+**Updates over Wi-Fi.** CI builds every merge to `main` that touches the firmware and uploads it to
+the vault, which keeps one build in R2 (I can also upload one by hand on its Screens page). At the end of each sync the board asks for it, with the build it runs; if the vault has
 another, the board writes it to its spare 3 MB app slot (the progress shows under the wheel), and
 restarts into it. The bootloader checks the image's own SHA-256 before it will boot it. The new build
 is on trial until it has fetched the record list: if it crashes or the power goes before then, the
@@ -183,8 +183,12 @@ To use a gateway on your laptop instead of the deployed one:
 PLATFORMIO_BUILD_FLAGS='-DGATEWAY_URL=\"http://192.168.0.159:8787\"' pio run -e screen -t upload
 ```
 
-After that, updates can go over Wi-Fi: upload `firmware/.pio/build/screen/firmware.bin` on the
-vault's `/link` page, and tap Refresh on the screen or wait for the next hourly sync.
+After that, updates go over Wi-Fi. Every merge to `main` that changes `firmware/` is built by CI
+(`.github/workflows/firmware-release.yml`) and uploaded to the vault, and each screen installs it on
+its next sync: tap Refresh, or wait for the hour. The build is also kept on the workflow run, for a
+USB flash. To send one by hand, upload `firmware/.pio/build/screen/firmware.bin` on the vault's
+Screens page (`/link`). CI needs three repository secrets: `VAULT_API_KEY`, and an Access service
+token allowed on the vault (`CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`).
 
 On first boot: pick Wi-Fi, scan the QR code, approve on your phone. The first sync takes about
 five minutes, mostly making the covers. After that it starts in a few seconds.

@@ -13,6 +13,8 @@ board and a small Worker.
 - One PR, one purpose. Commit subjects are imperative and under 72 characters.
 - Before pushing: `npm run check` in `gateway/`, and `pio test -e native` plus `pio run -e screen`
   in `firmware/`. CI runs the same.
+- **A merge to main that changes `firmware/` ships it.** `firmware-release.yml` builds it and uploads it
+  to the vault, and every screen installs it on its next sync. Only merge firmware that ran on the board.
 - The PR body says what changed, how it was verified (on the board, if it is firmware), and
   whether the README needed updating.
 

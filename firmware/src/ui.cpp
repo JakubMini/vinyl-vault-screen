@@ -892,7 +892,6 @@ static void build_wheel(bool picker) {
   wheel.sync_text = "";
   // LVGL paints the whole new screen, band included, on its next refresh: draw over it after.
   wheel.repaint = 3;
-  if (!wheel.strip) wheel.strip = (uint16_t *)heap_caps_malloc(BOARD_W * STRIP * 2, MALLOC_CAP_INTERNAL);
   if (isnan(wheel.target)) wheel.target = roundf(wheel.pos);
   for (auto &shown : wheel.shown) shown = nullptr;
 
@@ -1421,6 +1420,10 @@ static void start() {
 void ui_begin() {
   // Dark, with the site's green: the keyboard, text field and pressed states follow it.
   lv_display_set_theme(nullptr, lv_theme_default_init(lv_display_get_default(), ACCENT, DOWN, true, &font_16));
+  // Now, before Wi-Fi: once it and a sync's TLS are up, 15 KB of internal RAM in one piece may not
+  // be there, and a wheel drawing into a null strip resets the board.
+  wheel.strip = (uint16_t *)heap_caps_malloc(BOARD_W * STRIP * 2, MALLOC_CAP_INTERNAL);
+  assert(wheel.strip);
   draw_record(vinyl, WHEEL_FRONT_PX, 6, 0x18E3);  // the placeholder cover: a record on a CHIP sleeve
   draw_record(disc, 144, 0, ART_BG);
   draw_record(platter, 240, 0, ART_BG);

@@ -61,8 +61,18 @@ std::vector<String> wifi_scan() {
   return out;
 }
 
+static bool joined;  // a network was joined since boot: keep it
+
 bool wifi_connect(const String &ssid, const String &pass) {
   open_prefs();
+  static bool logging = false;
+  if (!logging) {
+    logging = true;
+    WiFi.onEvent([](arduino_event_id_t, arduino_event_info_t info) {
+      Serial.printf("{\"event\":\"wifi_lost\",\"reason\":%u}\n", info.wifi_sta_disconnected.reason);
+    }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+  }
+  joined = false;
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);  // mains powered; sleeping only adds latency to every touch
   WiFi.begin(ssid.c_str(), pass.c_str());
@@ -73,6 +83,7 @@ bool wifi_connect(const String &ssid, const String &pass) {
       return false;
     }
   }
+  joined = true;
   String known;
   if (!wifi_known(ssid, known) || known != pass) {  // NVS writes only what changed
     JsonDocument doc;
@@ -89,6 +100,17 @@ bool wifi_connect(const String &ssid, const String &pass) {
   Serial.printf("{\"event\":\"wifi\",\"ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"linked\":%s}\n", ssid.c_str(),
                 WiFi.localIP().toString().c_str(), WiFi.RSSI(), token.isEmpty() ? "false" : "true");
   return true;
+}
+
+// Arduino rejoins by itself only after some kinds of drop, and stops after one failed try at others.
+void wifi_keep() {
+  static uint32_t lost_at;
+  if (!joined || WiFi.isConnected()) return (void)(lost_at = 0);
+  if (!lost_at) lost_at = millis() | 1;
+  if (millis() - lost_at < 30000) return;
+  Serial.println("{\"event\":\"wifi_rejoin\"}");
+  WiFi.reconnect();
+  lost_at = millis() | 1;
 }
 
 bool vault_linked() { return !token.isEmpty(); }

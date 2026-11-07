@@ -33,6 +33,7 @@ enum class LinkState { Pending, Linked, Expired, Error };
 bool wifi_known(const String &ssid, String &pass);         // joined before: its password
 bool wifi_connect(const String &ssid, const String &pass);  // join, set the clock, remember; false after 20 s
 std::vector<String> wifi_scan();                            // nearby networks, strongest first
+void wifi_keep();  // sync task, often: rejoin the network joined at boot after 30 s without it
 
 bool vault_linked();     // a device token is stored
 void vault_forget();     // drop the token, e.g. after a 401

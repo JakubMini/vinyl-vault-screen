@@ -10,6 +10,7 @@ const ALLOWED: [method: string, path: RegExp][] = [
   ["GET", /^\/api\/tags\/[0-9A-F]{8,20}$/],
   ["PUT", /^\/api\/tags\/[0-9A-F]{8,20}$/],
   ["POST", /^\/api\/plays$/],
+  ["GET", /^\/api\/firmware\/bin$/],
 ];
 
 export default {

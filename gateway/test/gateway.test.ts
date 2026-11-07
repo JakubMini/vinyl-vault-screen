@@ -29,6 +29,7 @@ describe("gateway", () => {
     ["GET", "/api/tags/04C67BA5892681"],
     ["PUT", "/api/tags/04C67BA5892681"],
     ["POST", "/api/plays"],
+    ["GET", "/api/firmware/bin?running=0123abcd"],
   ])("forwards %s %s", async (method, path) => {
     const { response, seen } = call(method, path);
     expect((await response).status).toBe(200);
@@ -49,6 +50,8 @@ describe("gateway", () => {
     ["DELETE", "/api/tags/04C67BA5892681"],
     ["GET", "/api/tags/../devices"],
     ["GET", "/api/plays"],
+    ["GET", "/api/firmware"],
+    ["PUT", "/api/firmware"],
     ["GET", "/"],
   ])("refuses %s %s", async (method, path) => {
     const { response, seen } = call(method, path);

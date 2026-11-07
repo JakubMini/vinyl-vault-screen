@@ -2,6 +2,7 @@
 // negative number when the gateway could not be reached. 401 means the screen is no longer linked.
 #pragma once
 #include <Arduino.h>
+#include <functional>
 #include <vector>
 
 constexpr int GRADE_COUNT = 8;
@@ -63,3 +64,7 @@ struct Play {
   time_t at;
 };
 int vault_plays(const std::vector<Play> &plays);
+// Sync task only. Installs the build uploaded to the vault into the spare app slot, unless this board
+// runs it (204), has installed it before (-2), or none was uploaded (404). On a 200 it boots next
+// restart; progress(done, total) is called in bytes as it is written.
+int vault_firmware(const std::function<void(size_t, size_t)> &progress);

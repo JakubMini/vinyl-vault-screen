@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <esp_app_desc.h>
 
 #include "board.h"
 #include "covers.h"
@@ -48,7 +49,9 @@ void setup() {
   // into pieces too small for TLS, which needs one block of about 17 KB per connection.
   heap_caps_malloc_extmem_enable(64);
   Serial.begin(115200);
-  Serial.printf("{\"event\":\"boot\",\"psram\":%u}\n", ESP.getPsramSize());
+  char build[9];  // the first 8 of what the vault's Screens page shows as the build
+  esp_app_get_elf_sha256(build, sizeof build);
+  Serial.printf("{\"event\":\"boot\",\"psram\":%u,\"build\":\"%s\"}\n", ESP.getPsramSize(), build);
   board_begin();
   store_begin();
   sync_begin();

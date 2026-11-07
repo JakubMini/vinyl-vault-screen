@@ -2,6 +2,7 @@
 
 #include <Preferences.h>
 #include <WiFi.h>
+#include <esp_ota_ops.h>
 #include <img_converters.h>
 
 #include <algorithm>
@@ -70,6 +71,34 @@ static const char *make_cover(const Record &r, int &code) {
   }
   free(rgb);
   return failed;
+}
+
+static bool unlinked(int code);
+
+// ---- new builds, over Wi-Fi ------------------------------------------------------------------
+//
+// A build fresh from the vault boots on trial. Until it has fetched the record list it isn't marked
+// good, so a reset before then (a crash, the watchdog, the power) boots the build before it again.
+static bool on_trial;
+
+// Arduino would mark every build good as it boots.
+extern "C" bool verifyRollbackLater() { return true; }
+
+static void trial_passed() {
+  if (!on_trial) return;
+  on_trial = false;
+  esp_ota_mark_app_valid_cancel_rollback();
+  Serial.println("{\"event\":\"update_kept\"}");
+}
+
+// Any build uploaded to the vault since: installed now, and the board restarts into it.
+static void update_firmware() {
+  int code = vault_firmware([](size_t done, size_t total) { progress("firmware", done / 1024, total / 1024); });
+  if (code < 0) vault_close();  // a skipped or failed download leaves the reply half read
+  if (unlinked(code) || code != 200) return;
+  Serial.println("{\"event\":\"updated\"}");
+  delay(100);  // the log line out
+  ESP.restart();
 }
 
 // ---- one sync --------------------------------------------------------------------------------
@@ -314,6 +343,7 @@ static void run() {
     update([](SyncStatus &s) { s.running = false, s.failed = true; });
     return;
   }
+  trial_passed();
   store_load_records(old);
   // Only what changed is written, and the screen only reloads when something did.
   if (store_save_records(fresh)) update([](SyncStatus &s) { s.records_gen++; });
@@ -374,6 +404,8 @@ static void run() {
     made++;
   }
 
+  update_firmware();
+
   const time_t now = time(nullptr);
   prefs.putULong64("last_ok", now);
   if (resized) prefs.putInt("cover_px", COVER_PX);
@@ -424,6 +456,10 @@ void sync_begin() {
   play_inbox = xQueueCreate(32, sizeof(PlayNote));
   prefs.begin("sync");
   status.last_ok = prefs.getULong64("last_ok", 0);
+  esp_ota_img_states_t state;
+  on_trial = esp_ota_get_state_partition(esp_ota_get_running_partition(), &state) == ESP_OK &&
+             state == ESP_OTA_IMG_PENDING_VERIFY;
+  requested = on_trial;  // a sync as soon as Wi-Fi is up, to pass the trial
   // Core 0, away from LVGL on core 1: decoding a Discogs cover takes about a second. At idle
   // priority, as a TLS handshake is two seconds of sums: above it, the handshake and the covers'
   // loader between them can keep core 0's idle task out long enough for the watchdog to reset.

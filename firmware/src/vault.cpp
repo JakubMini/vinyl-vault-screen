@@ -4,7 +4,9 @@
 #include <HTTPClient.h>
 #include <NetworkClientSecure.h>
 #include <Preferences.h>
+#include <Update.h>
 #include <WiFi.h>
+#include <esp_app_desc.h>
 
 #include <algorithm>
 #include <functional>
@@ -154,8 +156,8 @@ static int call(const char *method, const String &path, const String &body, Json
   http.addHeader("Accept", "application/json");
   if (!token.isEmpty()) http.addHeader("Authorization", "Bearer " + token);
   if (!body.isEmpty()) http.addHeader("Content-Type", "application/json");
-  static const char *COVER_HEADERS[] = {"X-Cover-Width", "X-Cover-Height"};
-  http.collectHeaders(COVER_HEADERS, 2);
+  static const char *RAW_HEADERS[] = {"X-Cover-Width", "X-Cover-Height", "X-Firmware-Build"};
+  http.collectHeaders(RAW_HEADERS, 3);
 
   const uint32_t start = millis();
   int status = http.sendRequest(method, (uint8_t *)body.c_str(), body.length());
@@ -165,7 +167,7 @@ static int call(const char *method, const String &path, const String &body, Json
     const String reply = http.getString();  // handles chunked replies; lands in PSRAM
     DeserializationError err = filter ? deserializeJson(doc, reply, DeserializationOption::Filter(*filter))
                                       : deserializeJson(doc, reply);
-    if (err && status < 300) status = -2;
+    if (err && status < 300 && status != 204) status = -2;
   }
   http.end();
   Serial.printf("{\"event\":\"http\",\"method\":\"%s\",\"path\":\"%s\",\"status\":%d,\"ms\":%lu,\"internal_largest\":%u,\"internal_free\":%u}\n",
@@ -325,6 +327,33 @@ int vault_cover(int id, uint8_t *&rgb, int &w, int &h) {
     if (got == len) return true;
     free(rgb);
     rgb = nullptr;
+    return false;
+  });
+}
+
+int vault_firmware(const std::function<void(size_t, size_t)> &progress) {
+  open_prefs();
+  char running[65];
+  esp_app_get_elf_sha256(running, sizeof running);
+  JsonDocument doc;
+  return call("GET", "/api/firmware/bin?running=" + String(running), "", doc, nullptr, true, [&](HTTPClient &http) {
+    const String build = http.header("X-Firmware-Build");
+    // Installed before: it rolled back, or a build has gone on over USB since. Only a new upload goes on.
+    if (build == prefs.getString("ota_build")) {
+      Serial.printf("{\"event\":\"update_skipped\",\"build\":\"%s\"}\n", build.c_str());
+      return false;
+    }
+    const int len = http.getSize();
+    if (len <= 0 || !Update.begin(len)) return false;
+    Update.onProgress(progress);
+    // Update.end has the bootloader's checks run over the image, its SHA-256 among them, before it
+    // will boot it: a cut or garbled download is refused.
+    if (Update.writeStream(*http.getStreamPtr()) == (size_t)len && Update.end()) {
+      prefs.putString("ota_build", build);
+      return true;
+    }
+    Serial.printf("{\"event\":\"update_failed\",\"error\":\"%s\"}\n", Update.errorString());
+    Update.abort();
     return false;
   });
 }

@@ -32,7 +32,7 @@ board and a small Worker.
 
 ## Where things live
 
-- `gateway/src/index.ts`: the public Worker. An allowlist of nine routes, forwarded to the vault
+- `gateway/src/index.ts`: the public Worker. An allowlist of ten routes, forwarded to the vault
   over a service binding, passing only `vvd_` device tokens. Tests in `gateway/test/`.
 - `firmware/` (PlatformIO, Arduino core 3, LVGL 9):
   - `src/board.cpp`: panel, touch, LVGL glue. Pins and the ST7701 init live here only.
@@ -50,6 +50,10 @@ board and a small Worker.
     mid-transfer left it holding SCL low until it lost power.
   - `src/ui.cpp`: the screens. The wheel draws itself straight into the panel; LVGL does the rest.
   - `include/wheel.h`: the wheel's geometry, pure and tested on the laptop (`test/test_wheel`).
+  - Updates over Wi-Fi (`vault_firmware` in `vault.cpp`, the trial in `sync.cpp`): the build uploaded
+    on the vault's `/link` page goes on at the end of a sync. It stays on trial (rolled back on the
+    next reset) until it has fetched the record list. NVS keeps the last build installed (`ota_build`),
+    which is never installed again, so a USB-flashed build isn't overwritten by an old upload.
   - `include/config.h`: the gateway URL. Nothing secret lives in the firmware.
 - Logs are JSON lines on the serial port: `{"event":"..."}`.
 

@@ -55,7 +55,7 @@ The price at every grade is right there on the buttons.
 
 ```mermaid
 flowchart LR
-  screen(["Screen<br/>ESP32-S3"]) -->|HTTPS, device token| gateway["Gateway Worker<br/>(public, 9 routes)"]
+  screen(["Screen<br/>ESP32-S3"]) -->|HTTPS, device token| gateway["Gateway Worker<br/>(public, 10 routes)"]
   gateway -->|service binding| vault["Vinyl Value Vault<br/>(behind Cloudflare Access)"]
   phone(["Phone"]) -->|Access login, Approve| vault
   vault -->|cover images| discogs[("Discogs image CDN")]
@@ -64,11 +64,21 @@ flowchart LR
 **Why a gateway.** Cloudflare Access protects the vault on every hostname and path, so a
 microcontroller can't reach it. The [Alexa skill](https://github.com/JakubMini/vinyl-vault-alexa)
 already solves this with a service binding: one Worker calling another inside Cloudflare. The
-gateway does the same, but it forwards only nine routes (`POST /api/device/code` and `/token`,
+gateway does the same, but it forwards only ten routes (`POST /api/device/code` and `/token`,
 `GET /api/records`, `GET /api/records/:id` and its `/cover`, `PATCH /api/records/:id`, `GET` and `PUT
-/api/tags/:uid`, and `POST /api/plays`). It passes on only screen tokens, so the vault's API key
-can't be used to get round Access. The vault checks every token itself, and a screen's token can
-read records and their covers, change grades, look up or assign NFC tags and log plays, nothing more.
+/api/tags/:uid`, `POST /api/plays`, and `GET /api/firmware/bin`). It passes on only screen tokens, so
+the vault's API key can't be used to get round Access. The vault checks every token itself, and a
+screen's token can read records and their covers, change grades, look up or assign NFC tags, log
+plays and fetch a new build of its firmware, nothing more.
+
+**Updates over Wi-Fi.** I upload `firmware.bin` on the vault's Screens page (`/link`), which keeps one
+build in R2. At the end of each sync the board asks for it, with the build it runs; if the vault has
+another, the board writes it to its spare 3 MB app slot (the progress shows under the wheel), and
+restarts into it. The bootloader checks the image's own SHA-256 before it will boot it. The new build
+is on trial until it has fetched the record list: if it crashes or the power goes before then, the
+board boots the old one again. The board remembers the last build it installed and never installs
+it twice, so a build that rolled back, or one replaced over USB, stays off. To roll back, upload the
+older build. Builds are not signed: whoever can sign in to the vault can put code on the board.
 
 **The login** follows the shape of OAuth's device flow (RFC 8628):
 
@@ -173,6 +183,9 @@ To use a gateway on your laptop instead of the deployed one:
 PLATFORMIO_BUILD_FLAGS='-DGATEWAY_URL=\"http://192.168.0.159:8787\"' pio run -e screen -t upload
 ```
 
+After that, updates can go over Wi-Fi: upload `firmware/.pio/build/screen/firmware.bin` on the
+vault's `/link` page, and tap Refresh on the screen or wait for the next hourly sync.
+
 On first boot: pick Wi-Fi, scan the QR code, approve on your phone. The first sync takes about
 five minutes, mostly making the covers. After that it starts in a few seconds.
 
@@ -191,6 +204,7 @@ before-and-after profile. The details are in [CLAUDE.md](CLAUDE.md).
 - [ ] Deploy the gateway and merge the vault's device login
 - [x] NFC: tap a sleeve to open its record, and assign new stickers from the screen
 - [x] Log a play each time a sleeve's tag is read
+- [x] Updates over Wi-Fi, uploaded on the vault, with rollback
 - [ ] A yearly "wrapped" from those plays
 - [ ] A printed stand. The [v3 STLs](https://claude.ai/share/23891de9-6aae-48fc-b43c-f0128d91087c)
       were modelled on a Waveshare 86 box; check they fit this one

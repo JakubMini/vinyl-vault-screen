@@ -32,12 +32,13 @@ board and a small Worker.
 
 ## Where things live
 
-- `gateway/src/index.ts`: the public Worker. An allowlist of eight routes, forwarded to the vault
+- `gateway/src/index.ts`: the public Worker. An allowlist of nine routes, forwarded to the vault
   over a service binding, passing only `vvd_` device tokens. Tests in `gateway/test/`.
 - `firmware/` (PlatformIO, Arduino core 3, LVGL 9):
   - `src/board.cpp`: panel, touch, LVGL glue. Pins and the ST7701 init live here only.
   - `src/vault.cpp`: Wi-Fi (remembered in NVS), the device login, gateway calls.
-  - `src/sync.cpp`: the background task that keeps the board's copy fresh, and makes covers.
+  - `src/sync.cpp`: the background task that keeps the board's copy fresh, and fetches covers (the vault
+    shrinks them to 180 px RGB; the board only re-encodes them as baseline JPEG).
   - `src/store.cpp`: the copy on LittleFS. Write only what changed: flash writes stall the panel.
   - `src/covers.cpp`: cover JPEGs held in PSRAM, decoded on a background task.
   - `src/nfc.cpp`: the PN532 on the H3 header, UART (ESP32 RX on GPIO43, TX on IO0), polled on

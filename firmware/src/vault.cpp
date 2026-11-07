@@ -7,6 +7,7 @@
 #include <WiFi.h>
 
 #include <algorithm>
+#include <functional>
 
 #include "config.h"
 
@@ -131,10 +132,12 @@ void vault_close() {
   kept_plain.stop();
 }
 
-// One request to the gateway; the JSON reply (or error body) lands in doc. keep reuses one
-// connection for the sync task's long runs of calls; anything else opens its own.
+// One request to the gateway; the JSON reply (or error body) lands in doc, or a 200's body goes to
+// raw instead (false: it couldn't be read). keep reuses one connection for the sync task's long
+// runs of calls; anything else opens its own.
 static int call(const char *method, const String &path, const String &body, JsonDocument &doc,
-                const JsonDocument *filter = nullptr, bool keep = false) {
+                const JsonDocument *filter = nullptr, bool keep = false,
+                const std::function<bool(HTTPClient &)> &raw = nullptr) {
   NetworkClientSecure own_tls;
   NetworkClient own_plain;
   HTTPClient own_http;
@@ -151,10 +154,14 @@ static int call(const char *method, const String &path, const String &body, Json
   http.addHeader("Accept", "application/json");
   if (!token.isEmpty()) http.addHeader("Authorization", "Bearer " + token);
   if (!body.isEmpty()) http.addHeader("Content-Type", "application/json");
+  static const char *COVER_HEADERS[] = {"X-Cover-Width", "X-Cover-Height"};
+  http.collectHeaders(COVER_HEADERS, 2);
 
   const uint32_t start = millis();
   int status = http.sendRequest(method, (uint8_t *)body.c_str(), body.length());
-  if (status > 0) {
+  if (status == 200 && raw) {
+    if (!raw(http)) status = -2;
+  } else if (status > 0) {
     const String reply = http.getString();  // handles chunked replies; lands in PSRAM
     DeserializationError err = filter ? deserializeJson(doc, reply, DeserializationOption::Filter(*filter))
                                       : deserializeJson(doc, reply);
@@ -298,4 +305,26 @@ int vault_plays(const std::vector<Play> &plays) {
   String json;
   serializeJson(body, json);
   return call("POST", "/api/plays", json, doc, nullptr, true);
+}
+
+int vault_cover(int id, uint8_t *&rgb, int &w, int &h) {
+  rgb = nullptr;
+  JsonDocument doc;
+  return call("GET", "/api/records/" + String(id) + "/cover", "", doc, nullptr, true, [&](HTTPClient &http) {
+    w = http.header("X-Cover-Width").toInt(), h = http.header("X-Cover-Height").toInt();
+    const int len = w * h * 3;
+    if (w <= 0 || h <= 0 || w > 1024 || h > 1024 || http.getSize() != len || !(rgb = (uint8_t *)ps_malloc(len))) return false;
+    NetworkClient *stream = http.getStreamPtr();
+    int got = 0;
+    for (const uint32_t deadline = millis() + 15000; got < len && millis() < deadline;) {
+      const int n = stream->read(rgb + got, len - got);
+      if (n > 0) got += n;
+      else if (!stream->connected()) break;
+      else delay(2);
+    }
+    if (got == len) return true;
+    free(rgb);
+    rgb = nullptr;
+    return false;
+  });
 }

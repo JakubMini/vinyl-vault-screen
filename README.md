@@ -55,20 +55,20 @@ The price at every grade is right there on the buttons.
 
 ```mermaid
 flowchart LR
-  screen(["Screen<br/>ESP32-S3"]) -->|HTTPS, device token| gateway["Gateway Worker<br/>(public, 8 routes)"]
+  screen(["Screen<br/>ESP32-S3"]) -->|HTTPS, device token| gateway["Gateway Worker<br/>(public, 9 routes)"]
   gateway -->|service binding| vault["Vinyl Value Vault<br/>(behind Cloudflare Access)"]
   phone(["Phone"]) -->|Access login, Approve| vault
-  screen -->|cover images| discogs[("Discogs image CDN")]
+  vault -->|cover images| discogs[("Discogs image CDN")]
 ```
 
 **Why a gateway.** Cloudflare Access protects the vault on every hostname and path, so a
 microcontroller can't reach it. The [Alexa skill](https://github.com/JakubMini/vinyl-vault-alexa)
 already solves this with a service binding: one Worker calling another inside Cloudflare. The
-gateway does the same, but it forwards only eight routes (`POST /api/device/code` and `/token`,
-`GET /api/records`, `GET /api/records/:id`, `PATCH /api/records/:id`, `GET` and `PUT
+gateway does the same, but it forwards only nine routes (`POST /api/device/code` and `/token`,
+`GET /api/records`, `GET /api/records/:id` and its `/cover`, `PATCH /api/records/:id`, `GET` and `PUT
 /api/tags/:uid`, and `POST /api/plays`). It passes on only screen tokens, so the vault's API key
 can't be used to get round Access. The vault checks every token itself, and a screen's token can
-read records, change grades, look up or assign NFC tags and log plays, nothing more.
+read records and their covers, change grades, look up or assign NFC tags and log plays, nothing more.
 
 **The login** follows the shape of OAuth's device flow (RFC 8628):
 
@@ -78,10 +78,11 @@ read records, change grades, look up or assign NFC tags and log plays, nothing m
 4. The screen has been polling every five seconds; now it gets a token. Only the token's hash is
    stored in the vault, and you can revoke it on the same page.
 
-**Covers.** Discogs serves most covers as *progressive* JPEGs, which the fast decoders for this
-chip can't read. So when a cover is new or has changed, the board decodes it once with
-[stb_image](https://github.com/nothings/stb) (about a second), shrinks it to 180 px and saves it as
-a small *baseline* JPEG, about 15 KB. At start-up all of them, about 2 MB, are loaded into PSRAM.
+**Covers.** Discogs serves most covers as 600 px *progressive* JPEGs. Decoding one takes about
+3 MB of PSRAM, more than the board has free, and the fast decoders for this chip can't read them
+at all. So the vault shrinks each cover to 180 px with Cloudflare Images and sends it as raw RGB.
+When a cover is new or has changed, the board fetches it once and saves it as a small *baseline*
+JPEG, about 15 KB. At start-up all of them, about 2 MB, are loaded into PSRAM.
 From there one decodes in a few milliseconds.
 
 **The wheel draws itself.** LVGL draws everything else, but scaling covers in software from PSRAM
@@ -137,7 +138,7 @@ The pins and panel set-up are in [`firmware/src/board.cpp`](firmware/src/board.c
 | Firmware | PlatformIO, Arduino core 3 ([pioarduino](https://github.com/pioarduino/platform-espressif32)) | Core 3 (ESP-IDF 5) has bounce buffers for the RGB panel, which keep it steady while Wi-Fi is busy. pioarduino can rebuild its IDF libraries with Espressif's display settings (`custom_sdkconfig`); the first build takes a few minutes longer. |
 | UI | [LVGL 9](https://lvgl.io) | Screens, text, keyboard, QR code, chart. The wheel is drawn by hand (see above). |
 | Display | [Arduino_GFX](https://github.com/moononournation/Arduino_GFX) | Ships this board's panel init sequence. |
-| Images | stb_image once, then [JPEGDEC](https://github.com/bitbank2/JPEGDEC) | Progressive originals once; fast baseline copies every time after. |
+| Images | [JPEGDEC](https://github.com/bitbank2/JPEGDEC), and the camera library's JPEG encoder | The vault sends each cover once as 180 px RGB; the board keeps a fast baseline copy. |
 | Storage | LittleFS (10 MB) + NVS | The collection and covers; Wi-Fi and the token. |
 | Fonts | [Funnel Sans and Display](https://fonts.google.com/specimen/Funnel+Sans), [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono), [Noto Sans Devanagari](https://fonts.google.com/noto/specimen/Noto+Sans+Devanagari) (SIL OFL), via `firmware/tools/fonts.sh` | The type of [jakubszypicyn.com](https://jakubszypicyn.com/vinyls). Latin with Polish and the rest of Extended-A, and Devanagari for titles, drawn letter by letter: LVGL doesn't join conjuncts. |
 | Gateway | Cloudflare Worker, TypeScript, no framework | 30 lines. Free. Same account as the vault. |

@@ -52,6 +52,9 @@ int vault_set_grade(int id, const char *field, const char *grade, Detail &d);
 // Sync task only. The record an NFC tag opens (a 404 for a tag nobody has assigned), and assigning one.
 int vault_tag(const String &uid, int &id);
 int vault_set_tag(const String &uid, int id);
+// Sync task only. A record's cover as raw RGB, at most 180 px a side; rgb is null unless the vault
+// sent one (free it after), and stays null on a 404 for a record without a cover.
+int vault_cover(int id, uint8_t *&rgb, int &w, int &h);
 // Sync task only. Plays: a record put on the stand, by its tag. at is UTC seconds; 0 if the board had
 // no clock yet, and the vault then stamps it on arrival.
 struct Play {

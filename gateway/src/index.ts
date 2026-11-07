@@ -5,6 +5,7 @@ const ALLOWED: [method: string, path: RegExp][] = [
   ["POST", /^\/api\/device\/(code|token)$/],
   ["GET", /^\/api\/records$/],
   ["GET", /^\/api\/records\/\d+$/],
+  ["GET", /^\/api\/records\/\d+\/cover$/],
   ["PATCH", /^\/api\/records\/\d+$/],
   ["GET", /^\/api\/tags\/[0-9A-F]{8,20}$/],
   ["PUT", /^\/api\/tags\/[0-9A-F]{8,20}$/],

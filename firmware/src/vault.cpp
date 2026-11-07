@@ -163,11 +163,12 @@ static int call(const char *method, const String &path, const String &body, Json
   int status = http.sendRequest(method, (uint8_t *)body.c_str(), body.length());
   if (status == 200 && raw) {
     if (!raw(http)) status = -2;
-  } else if (status > 0) {
+  } else if (status > 0 && status != 204) {  // a 204 has no body and no length: reading one waits for the
+                                             // kept-open connection to close, minutes on the gateway
     const String reply = http.getString();  // handles chunked replies; lands in PSRAM
     DeserializationError err = filter ? deserializeJson(doc, reply, DeserializationOption::Filter(*filter))
                                       : deserializeJson(doc, reply);
-    if (err && status < 300 && status != 204) status = -2;
+    if (err && status < 300) status = -2;
   }
   http.end();
   Serial.printf("{\"event\":\"http\",\"method\":\"%s\",\"path\":\"%s\",\"status\":%d,\"ms\":%lu,\"internal_largest\":%u,\"internal_free\":%u}\n",

@@ -1,0 +1,55 @@
+name: Firmware release
+
+# Every merge that changes the firmware goes to the vault, and from there to each screen on its next
+# sync. Only firmware changes: a rebuild of unchanged code can still come out with a new build hash
+# (a fresh IDF library build stamps its own time), which would update every screen for nothing.
+on:
+  push:
+    branches: [main]
+    paths: ["firmware/**"]
+  workflow_dispatch:
+
+# One upload at a time, in order, so an older build never lands after a newer one.
+concurrency:
+  group: firmware-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: firmware
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ hashFiles('firmware/platformio.ini') }}
+      - run: pip install platformio
+      # As in ci.yml: pioarduino's second build needs its core pinned in its own penv.
+      - run: python -m venv ~/.platformio/penv && ~/.platformio/penv/bin/pip install "pioarduino==6.2.0"
+      - run: pio test -e native
+      - run: pio run -e screen
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ github.sha }}
+          path: firmware/.pio/build/screen/firmware*.bin
+      # The vault is behind Cloudflare Access: the service token gets past it, the API key past the
+      # Worker's own check. The vault refuses anything that isn't an ESP32-S3 app image. A bad service
+      # token gets a redirect to the login page, which curl would call success: no redirects allowed.
+      - name: Upload to the vault
+        env:
+          VAULT_API_KEY: ${{ secrets.VAULT_API_KEY }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          curl --fail-with-body -sS -L --max-redirs 0 -X PUT https://vault.jakubszypicyn.com/api/firmware \
+            -H "Authorization: Bearer $VAULT_API_KEY" \
+            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @.pio/build/screen/firmware.bin
